@@ -211,8 +211,8 @@ func (d *DeviceDriver) StartReconcileProcess() {
 
 // StartNatsSubscription starts the nats subscription process
 func (d *DeviceDriver) StartNatsSubscription() {
-	log.Info("Starting nats subscribe...")
-	topic := "ndd." + *d.DeviceName
+	topic := "ndd." + *d.DeviceName + ".*"
+	log.Infof("Starting nats subscribe...; topic: %s", topic)
 	// Connect Options.
 	opts := []nats.Option{nats.Name(fmt.Sprintf("NATS Subscriber %s", topic))}
 	opts = d.SetupNatsConnOptions(opts)
