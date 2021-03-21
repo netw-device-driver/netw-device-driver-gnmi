@@ -19,24 +19,24 @@ package ddriver
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/nats-io/nats.go"
 	nddv1 "github.com/netw-device-driver/netw-device-controller/api/v1"
-	"github.com/netw-device-driver/netw-device-driver-gnmi/gnmic"
+	"github.com/netw-device-driver/netw-device-driver-gnmi/pkg/gnmic"
 	"github.com/netw-device-driver/netwdevpb"
 	"github.com/openconfig/gnmi/proto/gnmi_ext"
 	log "github.com/sirupsen/logrus"
-	"google.golang.org/protobuf/proto"
+	"google.golang.org/grpc"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const timer = 10
 
-// HardwareDetails struct
-type HardwareDetails struct {
+// DeviceeDetails struct
+type DeviceDetails struct {
 	// the Kind of hardware
 	Kind *string `json:"kind,omitempty"`
 	// the Mac address of the hardware
@@ -47,13 +47,14 @@ type HardwareDetails struct {
 
 // DeviceDriver contains the device driver information
 type DeviceDriver struct {
-	Server          *string
-	DeviceName      *string
-	GnmiClient      *gnmic.GnmiClient
-	K8sClient       *client.Client
-	NetworkNodeKind *string
-	HardwareDetails *HardwareDetails
-	LatestConfig    map[string]interface{}
+	//NatsServer         *string
+	CacheServerAddress *string
+	DeviceName         *string
+	GnmiClient         *gnmic.GnmiClient
+	K8sClient          *client.Client
+	NetworkNodeKind    *string
+	DeviceDetails      *DeviceDetails
+	LatestConfig       map[string]interface{}
 
 	Cache  *Cache
 	StopCh chan struct{}
@@ -63,10 +64,19 @@ type DeviceDriver struct {
 // Option is a function to initialize the options of the device driver
 type Option func(d *DeviceDriver)
 
-// WithServer initializes the server in the device driver
-func WithServer(s *string) Option {
+// WithNatsServer initializes the nats server in the device driver
+/*
+func WithNatsServer(s *string) Option {
 	return func(d *DeviceDriver) {
-		d.Server = s
+		d.NatsServer = s
+	}
+}
+*/
+
+// WithCacheServer initializes the cache server in the device driver
+func WithCacheServer(s *string) Option {
+	return func(d *DeviceDriver) {
+		d.CacheServerAddress = s
 	}
 }
 
@@ -126,12 +136,14 @@ func WithEncoding(e *string) GnmiProtocolOption {
 func NewDeviceDriver(opts []Option, popts ...GnmiProtocolOption) *DeviceDriver {
 	log.Info("initialize new device driver ...")
 	d := &DeviceDriver{
-		Server:       new(string),
-		DeviceName:   new(string),
-		LatestConfig: make(map[string]interface{}),
-		K8sClient:    new(client.Client),
+		//NatsServer:         new(string),
+		CacheServerAddress: new(string),
+		DeviceName:         new(string),
+		LatestConfig:       make(map[string]interface{}),
+		K8sClient:          new(client.Client),
 		Cache: &Cache{
-			Data:   make(map[int]map[string]*Data),
+			//Data:   make(map[int]map[string]*Data),
+			Data:   make(map[int]map[string]*ResourceData),
 			Levels: make([]int, 0),
 		},
 		StopCh: make(chan struct{}),
@@ -167,13 +179,20 @@ func (d *DeviceDriver) InitDeviceDriverControllers() error {
 	d.Ctx = ctx
 
 	// start nats device driver
-	go func() {
-		d.StartNatsSubscription()
-	}()
+	/*
+		go func() {
+			d.StartNatsSubscription()
+		}()
+	*/
 
 	// start reconcile device driver
 	go func() {
 		d.StartReconcileProcess()
+	}()
+
+	// start grpc server
+	go func() {
+		d.StartCacheGRPCServer()
 	}()
 
 	select {
@@ -185,6 +204,29 @@ func (d *DeviceDriver) InitDeviceDriverControllers() error {
 	cancel()
 
 	return nil
+}
+
+// StartCacheGRPCServer function
+func (d *DeviceDriver) StartCacheGRPCServer() {
+	log.Info("Starting cache GRPC server...")
+
+	// create a listener on TCP port 7777
+	lis, err := net.Listen("tcp", *d.CacheServerAddress)
+	if err != nil {
+		log.Fatalf("failed to listen: %v", err)
+	}
+
+	// create a gRPC server object
+	grpcServer := grpc.NewServer()
+
+	// attach the gRPC service to the server
+	netwdevpb.RegisterCacheStatusServer(grpcServer, d.Cache)
+	netwdevpb.RegisterCacheUpdateServer(grpcServer, d.Cache)
+
+	// start the server
+	if err := grpcServer.Serve(lis); err != nil {
+		log.Fatalf("failed to serve: %s", err)
+	}
 }
 
 // StartReconcileProcess starts the driver reconciiation process
@@ -210,29 +252,26 @@ func (d *DeviceDriver) StartReconcileProcess() {
 }
 
 // StartNatsSubscription starts the nats subscription process
+/*
 func (d *DeviceDriver) StartNatsSubscription() {
-	topic := "ndd." + *d.DeviceName + ".*"
+	topic := "ndd." + *d.DeviceName + ".*.*"
 	log.Infof("Starting nats subscribe...; topic: %s", topic)
 	// Connect Options.
 	opts := []nats.Option{nats.Name(fmt.Sprintf("NATS Subscriber %s", topic))}
 	opts = d.SetupNatsConnOptions(opts)
 
 	// Connect to NATS
-	nc, err := nats.Connect(*d.Server, opts...)
+	nc, err := nats.Connect(*d.NatsServer, opts...)
 	if err != nil {
 		log.Error("Nats connect error", "Error", err)
 		os.Exit(0)
 	}
 
 	nc.Subscribe(topic, func(msg *nats.Msg) {
-		netwCfgMsg := &netwdevpb.ConfigMessage{}
+		netwCfgMsg := &netwdevpb.CacheUpdateRequest{}
 		if err = proto.Unmarshal(msg.Data, netwCfgMsg); err != nil {
 			log.WithError(err).Error("unmarchal error")
 		}
-		if err = d.Cache.UpdateCacheEntry(msg.Subject, netwCfgMsg); err != nil {
-			log.WithError(err).Error("update cache error")
-		}
-		log.Infof("Nats subscription data path %s, %s", msg.Subject, netwCfgMsg.Action)
 	})
 	nc.Flush()
 
@@ -244,8 +283,10 @@ func (d *DeviceDriver) StartNatsSubscription() {
 			"Subject", topic)
 	}
 }
+*/
 
 // SetupNatsConnOptions defines the nats connection options
+/*
 func (d *DeviceDriver) SetupNatsConnOptions(opts []nats.Option) []nats.Option {
 	totalWait := 10 * time.Minute
 	reconnectDelay := time.Second
@@ -263,8 +304,10 @@ func (d *DeviceDriver) SetupNatsConnOptions(opts []nats.Option) []nats.Option {
 	}))
 	return opts
 }
+*/
 
 // DiscoverDeviceDetails discovers the device details
+
 func (d *DeviceDriver) DiscoverDeviceDetails() error {
 	log.Info("verifying gnmi capabilities...")
 

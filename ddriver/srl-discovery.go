@@ -59,7 +59,7 @@ func (d *DeviceDriver) DiscoverDeviceDetailsSRL() (*nddv1.DeviceDetails, error) 
 				switch sk {
 				case "version":
 					log.Info("set sw version type...")
-					dDetails.SwVersion = strings.Split(fmt.Sprintf("%v", v), "-")[0]
+					dDetails.SwVersion = &strings.Split(fmt.Sprintf("%v", v), "-")[0]
 				}
 			}
 
@@ -92,15 +92,15 @@ func (d *DeviceDriver) DiscoverDeviceDetailsSRL() (*nddv1.DeviceDetails, error) 
 				switch sk {
 				case "type":
 					log.Info("set hardware type...")
-					dDetails.Kind = fmt.Sprintf("%v", v)
+					dDetails.Kind = stringPtr(fmt.Sprintf("%v", v))
 					//g.nn.SetHardwareDetails("type", fmt.Sprintf("%v", v))
 				case "serial-number":
 					log.Info("set serial number...")
-					dDetails.SerialNumber = fmt.Sprintf("%v", v)
+					dDetails.SerialNumber = stringPtr(fmt.Sprintf("%v", v))
 					//g.nn.SetHardwareDetails("serial-number", fmt.Sprintf("%v", v))
 				case "mac-address":
 					log.Info("set mac address...")
-					dDetails.MacAddress = fmt.Sprintf("%v", v)
+					dDetails.MacAddress = stringPtr(fmt.Sprintf("%v", v))
 					//g.nn.SetHardwareDetails("mac-address", fmt.Sprintf("%v", v))
 				default:
 				}

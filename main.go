@@ -33,15 +33,23 @@ func init() {
 
 var (
 	// Log generic logger
-	natsServer string
-	deviceName string
-	debug      bool
+	//natsServer         string
+	cacheServerAddress string
+	deviceName         string
+	debug              bool
+	rootCaCsrTemplate  = "/templates/ca/csr-root-ca.json"
+	certCsrTemplate    = "/templates/ca/csr.json"
 )
 
 // InitFlags function
 func InitFlags(fs *pflag.FlagSet) {
-	fs.StringVar(&natsServer, "nats-server", "",
-		"The address the natsServer to subscribe to")
+	/*
+		fs.StringVar(&natsServer, "nats-server", "",
+			"The address forthe natsServer to subscribe to")
+	*/
+
+	fs.StringVar(&cacheServerAddress, "cache-server-address", "",
+		"The address of the cache server")
 
 	fs.StringVar(&deviceName, "device-name", "leaf1",
 		"Name of the device the driver serves")
@@ -57,11 +65,41 @@ func main() {
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
 	pflag.Parse()
 
-	if debug {
-		log.SetLevel(log.DebugLevel)
-	} else {
-		log.SetLevel(log.InfoLevel)
-	}
+	/*
+		if debug {
+			log.SetLevel(log.DebugLevel)
+			cfssllog.Level = cfssllog.LevelDebug
+		} else {
+			log.SetLevel(log.InfoLevel)
+			cfssllog.Level = cfssllog.LevelError
+		}
+
+		tpl, err := template.ParseFiles(rootCaCsrTemplate)
+		if err != nil {
+			log.WithError(err).Error("failed to parse rootCACsrTemplate")
+		}
+		_, err = util.GenerateRootCa(tpl, util.CaRootInput{Prefix: deviceName})
+		if err != nil {
+			log.WithError(err).Error("failed to generate rootCa")
+		}
+
+		// generate proxy CA
+		certTpl, err := template.ParseFiles(certCsrTemplate)
+		if err != nil {
+			log.WithError(err).Error("failed to parse certCsrTemplate")
+		}
+
+		_, err = util.GenerateCert(
+			deviceName,
+			path.Join(util.DirLabCAroot, "root-ca.pem"),
+			path.Join(util.DirLabCAroot, "root-ca-key.pem"),
+			certTpl,
+		)
+	*/
+
+	// get cacheServerAddress ip from the environment
+	cacheServerAddress = os.Getenv("POD_IP") + ":" + strings.Split(cacheServerAddress, ":")[1]
+	log.Infof("proxy cacheServerAddress: %s", cacheServerAddress)
 
 	// Get K8s client with scheme that includes the network device driver CRDs
 	k8sclopts := client.Options{
@@ -98,17 +136,18 @@ func main() {
 	password := strings.TrimSuffix(string(credsSecret.Data["password"]), "\n")
 
 	opts := []ddriver.Option{
-		ddriver.WithServer(&natsServer),
+		//ddriver.WithNatsServer(&natsServer),
+		ddriver.WithCacheServer(&cacheServerAddress),
 		ddriver.WithDeviceName(&deviceName),
 		ddriver.WithK8sClient(&c),
 	}
 
 	popts := []ddriver.GnmiProtocolOption{
-		ddriver.WithTarget(&nn.Spec.Target.Address),
+		ddriver.WithTarget(nn.Spec.Target.Address),
 		ddriver.WithUsername(&username),
 		ddriver.WithPassword(&password),
-		ddriver.WithSkipVerify(nn.Spec.Target.SkipVerify),
-		ddriver.WithEncoding(&nn.Spec.Target.Encoding),
+		ddriver.WithSkipVerify(*nn.Spec.Target.SkipVerify),
+		ddriver.WithEncoding(nn.Spec.Target.Encoding),
 	}
 	d := ddriver.NewDeviceDriver(opts, popts...)
 

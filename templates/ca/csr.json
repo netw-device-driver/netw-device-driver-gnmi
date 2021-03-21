@@ -1,0 +1,19 @@
+{
+    "CN": "{{.Name}}.{{.Prefix}}.io",
+    "key": {
+      "algo": "rsa",
+      "size": 2048
+    },
+    "names": [{
+      "C": "BE",
+      "L": "Antwerp",
+      "O": "Nokia",
+      "OU": "FSC Proxy"
+    }],
+    "hosts": [
+      "{{.Name}}",
+      "{{.LongName}}",
+      "{{.Fqdn}}"
+    ]
+}
+

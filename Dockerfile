@@ -12,7 +12,7 @@ RUN go mod download
 # Copy the go source
 COPY main.go main.go
 COPY ddriver/ ddriver/
-COPY gnmic/ gnmic/
+COPY pkg/ pkg/
 
 # Build
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build -a -o netwdevicedriver-gnmi main.go
@@ -49,6 +49,7 @@ RUN curl -sL https://github.com/karimra/gnmic/raw/master/install.sh | sh
 
 WORKDIR /
 COPY --from=builder /workspace/netwdevicedriver-gnmi .
+COPY templates/ca/ /templates/ca/
 USER 65532:65532
 
 ENTRYPOINT ["/netwdevicedriver-gnmi"]

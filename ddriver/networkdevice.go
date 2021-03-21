@@ -38,8 +38,8 @@ func (d *DeviceDriver) NetworkDeviceUpdate(dDetails *nddv1.DeviceDetails, status
 	}
 
 	nd.Status = nddv1.NetworkDeviceStatus{
-		DiscoveryStatus: status,
-		DeviceDetails:   *dDetails,
+		DiscoveryStatus: &status,
+		DeviceDetails:   dDetails,
 	}
 
 	if err := d.saveNetworkDeviceStatus(d.Ctx, nd); err != nil {
