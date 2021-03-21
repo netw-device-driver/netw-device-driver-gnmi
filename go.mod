@@ -6,7 +6,7 @@ require (
 	github.com/cloudflare/cfssl v1.5.0
 	github.com/evanphx/json-patch v4.9.0+incompatible
 	github.com/google/gnxi v0.0.0-20210301094713-a533bddd461b
-	github.com/netw-device-driver/netw-device-controller v0.1.2
+	github.com/netw-device-driver/netw-device-controller v0.1.3
 	github.com/netw-device-driver/netwdevpb v0.1.15
 	github.com/openconfig/gnmi v0.0.0-20210226144353-8eae1937bf84
 	github.com/sirupsen/logrus v1.8.1

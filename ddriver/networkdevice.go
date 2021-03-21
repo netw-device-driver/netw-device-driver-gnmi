@@ -37,9 +37,14 @@ func (d *DeviceDriver) NetworkDeviceUpdate(dDetails *nddv1.DeviceDetails, status
 		return err
 	}
 
+	grpcServer := &nddv1.GrpcServerDetails{
+		Port: d.CacheServerPort,
+	}
+
 	nd.Status = nddv1.NetworkDeviceStatus{
 		DiscoveryStatus: &status,
 		DeviceDetails:   dDetails,
+		GrpcServer:      grpcServer,
 	}
 
 	if err := d.saveNetworkDeviceStatus(d.Ctx, nd); err != nil {

@@ -522,8 +522,8 @@ github.com/mwitkow/go-conntrack v0.0.0-20161129095857-cc309e4a2223/go.mod h1:qRW
 github.com/mxk/go-flowrate v0.0.0-20140419014527-cca7078d478f/go.mod h1:ZdcZmHo+o7JKHSa8/e818NopupXU1YMK5fe1lsApnBw=
 github.com/nakabonne/nestif v0.3.0/go.mod h1:dI314BppzXjJ4HsCnbo7XzrJHPszZsjnk5wEBSYHI2c=
 github.com/nbutton23/zxcvbn-go v0.0.0-20180912185939-ae427f1e4c1d/go.mod h1:o96djdrsSGy3AWPyBgZMAGfxZNfgntdJG+11KU4QvbU=
-github.com/netw-device-driver/netw-device-controller v0.1.2 h1:4DcofXm7g74eIaWv5b8PkJ4THYgqThGv1QQtcYg06Os=
-github.com/netw-device-driver/netw-device-controller v0.1.2/go.mod h1:EVW4kZWNGPNfdhrTAJ/dA//4U/7nRiyw0mj0UJaYYFk=
+github.com/netw-device-driver/netw-device-controller v0.1.3 h1:oF13op33kdxQUAqLciLD7IUihtag658NU9Inei5rRRI=
+github.com/netw-device-driver/netw-device-controller v0.1.3/go.mod h1:EVW4kZWNGPNfdhrTAJ/dA//4U/7nRiyw0mj0UJaYYFk=
 github.com/netw-device-driver/netwdevpb v0.1.15 h1:dDk+sEWjZNsBnSxP1j7KV71gkVk5CVKvLiuuWzfP79k=
 github.com/netw-device-driver/netwdevpb v0.1.15/go.mod h1:MSKvJ0HvVNcZpldNZiPjSp1GdMCKLBZGwb81eo3pKVc=
 github.com/niemeyer/pretty v0.0.0-20200227124842-a10e7caefd8e h1:fD57ERR4JtEqsWbfPhv4DMiApHyliiK5xCTNVSPiaAs=

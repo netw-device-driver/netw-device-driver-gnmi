@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,6 +49,7 @@ type DeviceDetails struct {
 // DeviceDriver contains the device driver information
 type DeviceDriver struct {
 	//NatsServer         *string
+	CacheServerPort    *int
 	CacheServerAddress *string
 	DeviceName         *string
 	GnmiClient         *gnmic.GnmiClient
@@ -77,6 +79,8 @@ func WithNatsServer(s *string) Option {
 func WithCacheServer(s *string) Option {
 	return func(d *DeviceDriver) {
 		d.CacheServerAddress = s
+		p, _ := strconv.Atoi(strings.Split(*s, ":")[1])
+		d.CacheServerPort = &p
 	}
 }
 
