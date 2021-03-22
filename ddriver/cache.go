@@ -240,7 +240,12 @@ func (d *DeviceDriver) ReconcileCache() error {
 			// so that later if one delete fails we keep it in failed state
 			// for thi object
 			data.Config.AggregateActionPathSuccess = true
-			for _, ip := range data.Config.IndividualActionPath {
+			// clean IndividualActionPathSuccess
+			data.Config.IndividualActionPathSuccess = make([]bool, 0)
+			for i, ip := range data.Config.IndividualActionPath {
+				// append the IndividualActionPathSuccess and initialize them
+				data.Config.IndividualActionPathSuccess = append(data.Config.IndividualActionPathSuccess, false)
+
 				// - DependencyMissing -> child object is not deleted, but parent can get deleted or is not present
 				// - DeletePending -> child object will be deleted through gnmi which can be successfull or not
 				// - DeletePendingWithParentDependency -> child object and parent object gets deleted, but child status
@@ -249,7 +254,7 @@ func (d *DeviceDriver) ReconcileCache() error {
 				// just delete it w/o gnmi interaction
 				switch data.CacheStatus {
 				case netwdevpb.CacheStatusReply_DependencyMissing:
-					log.Error("This stat should never be processed here, since the dependncy is missing")
+					log.Error("This state should never be processed here, since the dependency is missing")
 				case netwdevpb.CacheStatusReply_DeletePending:
 					// process the gnmi to delete the object
 					if err := d.deleteDeviceDataGnmi(&ip); err != nil {
@@ -258,11 +263,11 @@ func (d *DeviceDriver) ReconcileCache() error {
 						// and indicate the failure in the status
 						data.CacheStatus = netwdevpb.CacheStatusReply_ToBeProcessed // so in the next iteration we retry
 						data.Config.AggregateActionPathSuccess = false
-						data.Config.IndividualActionPathSuccess = append(data.Config.IndividualActionPathSuccess, false)
+						data.Config.IndividualActionPathSuccess[i] = false
 						//informK8sOperator(dp)
 					} else {
 						// only update the individual status since we assume the aggregate object is success
-						data.Config.IndividualActionPathSuccess = append(data.Config.IndividualActionPathSuccess, true)
+						data.Config.IndividualActionPathSuccess[i] = true
 						log.Infof("GNMI delete processed successfully, object: %s, path: %s", o, ip)
 					}
 				case netwdevpb.CacheStatusReply_DeletePendingWithParentDependency:
@@ -270,20 +275,20 @@ func (d *DeviceDriver) ReconcileCache() error {
 					// E.g. delete interface and subinterfaces simultenously
 					if d.Cache.getParentDependencyDeleteStatus(data.Config.Dependencies) {
 						// parent delete was successfull
-						data.Config.IndividualActionPathSuccess = append(data.Config.IndividualActionPathSuccess, true)
+						data.Config.IndividualActionPathSuccess[i] = true
 						log.Infof("Parent GNMI delete processed successfully, object: %s, path: %s", o, ip)
 					} else {
 						// parent delete was NOT successfull
 						data.CacheStatus = netwdevpb.CacheStatusReply_ToBeProcessed // so in the next iteration we retry
 						data.Config.AggregateActionPathSuccess = false
-						data.Config.IndividualActionPathSuccess = append(data.Config.IndividualActionPathSuccess, false)
+						data.Config.IndividualActionPathSuccess[i] = false
 					}
 				case netwdevpb.CacheStatusReply_DeleteWithMissingDependency:
 					// dont delete through gnmi and the deletion will be successful since there is no parent dependency
 					// e.g. delete subinterface object, which had no interface configured ever
 					// since this object was never applied to the device we can just delete it w/o
 					// deleting the object on the device through gnmi
-					data.Config.IndividualActionPathSuccess = append(data.Config.IndividualActionPathSuccess, true)
+					data.Config.IndividualActionPathSuccess[i] = true
 
 				}
 			}
@@ -391,6 +396,8 @@ func (d *DeviceDriver) UpdateCacheAfterUpdate(updateSuccess bool) error {
 			if data.Config.Action == netwdevpb.CacheUpdateRequest_Update && data.CacheStatus == netwdevpb.CacheStatusReply_UpdateBeingProcessed {
 				if updateSuccess {
 					data.Config.AggregateActionPathSuccess = true
+					// reiniliaze the individualPath success
+					data.Config.IndividualActionPathSuccess = make([]bool, 0)
 					for _, ip := range data.Config.IndividualActionPath {
 						log.Infof("update processed successfully, object: %s, path: %s", o, ip)
 						data.Config.IndividualActionPathSuccess = append(data.Config.IndividualActionPathSuccess, true)
@@ -398,6 +405,8 @@ func (d *DeviceDriver) UpdateCacheAfterUpdate(updateSuccess bool) error {
 					d.Cache.SetStatus(l, o, netwdevpb.CacheStatusReply_UpdateProcessedSuccess)
 				} else {
 					data.Config.AggregateActionPathSuccess = false
+					// reiniliaze the individualPath success
+					data.Config.IndividualActionPathSuccess = make([]bool, 0)
 					for _, ip := range data.Config.IndividualActionPath {
 						log.Infof("update processed successfully, object: %s, path: %s", o, ip)
 						data.Config.IndividualActionPathSuccess = append(data.Config.IndividualActionPathSuccess, false)

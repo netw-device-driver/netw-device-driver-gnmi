@@ -161,7 +161,5 @@ func main() {
 		}
 	}
 
-	// TODO update status in k8s API
-
 	d.InitDeviceDriverControllers()
 }
