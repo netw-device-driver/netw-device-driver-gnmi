@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	nddv1 "github.com/netw-device-driver/netw-device-controller/api/v1"
+	"github.com/netw-device-driver/netw-device-driver-gnmi/pkg/gnmic"
 	"github.com/openconfig/gnmi/proto/gnmi"
 	log "github.com/sirupsen/logrus"
 )
@@ -38,15 +39,15 @@ func (d *DeviceDriver) DiscoverDeviceDetailsSRL() (*nddv1.DeviceDetails, error) 
 	log.Info("Discover SRL details ...")
 
 	p = "/system/app-management/application[name=idb_server]"
-	req, err = d.GnmiClient.CreateGetRequest(&p, "STATE")
+	req, err = gnmic.CreateGetRequest(&p, stringPtr("STATE"), stringPtr("JSON_IETF"))
 	if err != nil {
 		return nil, err
 	}
-	rsp, err = d.GnmiClient.Get(d.Ctx, req)
+	rsp, err = d.Target.Get(d.Ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	u, err := d.GnmiClient.HandleGetResponse(rsp)
+	u, err := gnmic.HandleGetResponse(rsp)
 	if err != nil {
 		return nil, err
 	}
@@ -70,16 +71,16 @@ func (d *DeviceDriver) DiscoverDeviceDetailsSRL() (*nddv1.DeviceDetails, error) 
 	log.Infof("Device details sw version %v", dDetails.SwVersion)
 
 	p = "/platform/chassis"
-	req, err = d.GnmiClient.CreateGetRequest(&p, "STATE")
+	req, err = gnmic.CreateGetRequest(&p, stringPtr("STATE"), stringPtr("JSON_IETF"))
 	if err != nil {
 		return nil, err
 	}
-	rsp, err = d.GnmiClient.Get(d.Ctx, req)
+	rsp, err = d.Target.Get(d.Ctx, req)
 	if err != nil {
 		return nil, err
 	}
 
-	u, err = d.GnmiClient.HandleGetResponse(rsp)
+	u, err = gnmic.HandleGetResponse(rsp)
 	if err != nil {
 		return nil, err
 	}
@@ -123,16 +124,16 @@ func (d *DeviceDriver) GetLatestConfig() (map[string]interface{}, error) {
 	var rsp *gnmi.GetResponse
 
 	p = "/"
-	req, err = d.GnmiClient.CreateGetRequest(&p, "CONFIG")
+	req, err = gnmic.CreateGetRequest(&p, stringPtr("CONFIG"), stringPtr("JSON_IETF"))
 	if err != nil {
 		return nil, err
 	}
-	rsp, err = d.GnmiClient.Get(d.Ctx, req)
+	rsp, err = d.Target.Get(d.Ctx, req)
 	if err != nil {
 		return nil, err
 	}
 
-	u, err := d.GnmiClient.HandleGetResponse(rsp)
+	u, err := gnmic.HandleGetResponse(rsp)
 	if err != nil {
 		return nil, err
 	}

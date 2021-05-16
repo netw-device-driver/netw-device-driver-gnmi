@@ -2,19 +2,15 @@ package gnmic
 
 import (
 	"bytes"
-	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/google/gnxi/utils/xpath"
+	"github.com/karimra/gnmic/collector"
 	"github.com/openconfig/gnmi/proto/gnmi"
-	"github.com/openconfig/gnmi/proto/gnmi_ext"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/metadata"
+	log "github.com/sirupsen/logrus"
+	"github.com/stoewer/go-strcase"
 )
 
 const (
@@ -23,119 +19,99 @@ const (
 	maxMsgSize      = 512 * 1024 * 1024
 )
 
-// GnmiClient holds the state of the GNMI configuration
-type GnmiClient struct {
-	Username   string
-	Password   string
-	Proxy      bool
-	NoTLS      bool
-	TLSCA      string
-	TLSCert    string
-	TLSKey     string
-	SkipVerify bool
-	Insecure   bool
-	Encoding   string
-	Timeout    time.Duration
-	Target     string
-	MaxMsgSize int
-	Client     gnmi.GNMIClient
+func SubName(s *string) *string {
+	split := strings.Split(*s, "/")
+	subName := "sub"
+	for _, n := range split {
+		subName += strcase.UpperCamelCase(n)
+	}
+	return &subName
 }
 
-// NewGnmiClient return gnmi client
-func NewGnmiClient() *GnmiClient {
-	return new(GnmiClient)
-}
+func CreateSubscriptionRequest(subPaths *[]string) (*gnmi.SubscribeRequest, error) {
+	// create subscription
+	paths := *subPaths
 
-// Initialize the gnmic client
-func (g *GnmiClient) Initialize() error {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	opts := createDialOpts()
-	if err := g.CreateGNMIClient(ctx, opts...); err != nil {
-		return err
-	}
-	return nil
-}
-
-func createDialOpts() []grpc.DialOption {
-	opts := []grpc.DialOption{}
-	opts = append(opts, grpc.WithBlock())
-	opts = append(opts, grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(maxMsgSize)))
-	opts = append(opts, grpc.WithNoProxy())
-	return opts
-}
-
-// CreateGNMIClient create gnmi client
-func (g *GnmiClient) CreateGNMIClient(ctx context.Context, opts ...grpc.DialOption) error {
-	if opts == nil {
-		opts = []grpc.DialOption{}
-	}
-	if g.Insecure {
-		opts = append(opts, grpc.WithInsecure())
-	} else {
-		tlsConfig, err := g.newTLS()
-		if err != nil {
-			return err
-		}
-		opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
-	}
-	timeoutCtx, cancel := context.WithTimeout(ctx, defaultTimeout)
-	defer cancel()
-	conn, err := grpc.DialContext(timeoutCtx, g.Target, opts...)
-	if err != nil {
-		return err
-	}
-	g.Client = gnmi.NewGNMIClient(conn)
-	return nil
-}
-
-// newTLS sets up a new TLS profile
-func (g *GnmiClient) newTLS() (*tls.Config, error) {
-	tlsConfig := &tls.Config{
-		Renegotiation:      tls.RenegotiateNever,
-		InsecureSkipVerify: g.SkipVerify,
-	}
-	err := g.loadCerts(tlsConfig)
-	if err != nil {
-		return nil, err
-	}
-	return tlsConfig, nil
-}
-
-func (g *GnmiClient) loadCerts(tlscfg *tls.Config) error {
 	/*
-		if *c.TLSCert != "" && *c.TLSKey != "" {
-			certificate, err := tls.LoadX509KeyPair(*c.TLSCert, *c.TLSKey)
-			if err != nil {
-				return err
-			}
-			tlscfg.Certificates = []tls.Certificate{certificate}
-			tlscfg.BuildNameToCertificate()
+		sc := &collector.SubscriptionConfig{
+			Name:       subName,
+			Prefix:     "",
+			Target:     "",
+			Paths:      paths,
+			Mode:       "STREAM",
+			StreamMode: "ON_CHANGE",
+			Encoding:   "JSON_IETF",
+			Qos:        Uint32Ptr(21),
 		}
-		if c.TLSCA != nil && *c.TLSCA != "" {
-			certPool := x509.NewCertPool()
-			caFile, err := ioutil.ReadFile(*c.TLSCA)
-			if err != nil {
-				return err
-			}
-			if ok := certPool.AppendCertsFromPEM(caFile); !ok {
-				return errors.New("failed to append certificate")
-			}
-			tlscfg.RootCAs = certPool
+		req, err := sc.CreateSubscribeRequest()
+		if err != nil {
+			log.WithError(err).Error("subscription creation failed")
 		}
 	*/
-	return nil
+
+	gnmiPrefix, err := collector.CreatePrefix("", "")
+	if err != nil {
+		return nil, fmt.Errorf("create prefix failed")
+	}
+	modeVal, _ := gnmi.SubscriptionList_Mode_value[strings.ToUpper("STREAM")]
+	//models := make([]*gnmi.ModelData, 0, len(sc.Models))
+	qos := &gnmi.QOSMarking{Marking: 21}
+
+	subscriptions := make([]*gnmi.Subscription, len(paths))
+	for i, p := range paths {
+		gnmiPath, _ := collector.ParsePath(strings.TrimSpace(p))
+		subscriptions[i] = &gnmi.Subscription{Path: gnmiPath}
+		switch gnmi.SubscriptionList_Mode(modeVal) {
+		case gnmi.SubscriptionList_STREAM:
+			mode, _ := gnmi.SubscriptionMode_value[strings.Replace(strings.ToUpper("ON_CHANGE"), "-", "_", -1)]
+			subscriptions[i].Mode = gnmi.SubscriptionMode(mode)
+			/*
+				switch gnmi.SubscriptionMode(mode) {
+				case gnmi.SubscriptionMode_ON_CHANGE:
+					if sc.HeartbeatInterval != nil {
+						subscriptions[i].HeartbeatInterval = uint64(sc.HeartbeatInterval.Nanoseconds())
+					}
+				case gnmi.SubscriptionMode_SAMPLE, gnmi.SubscriptionMode_TARGET_DEFINED:
+					if sc.SampleInterval != nil {
+						subscriptions[i].SampleInterval = uint64(sc.SampleInterval.Nanoseconds())
+					}
+					subscriptions[i].SuppressRedundant = sc.SuppressRedundant
+					if subscriptions[i].SuppressRedundant {
+						subscriptions[i].HeartbeatInterval = uint64(sc.HeartbeatInterval.Nanoseconds())
+					}
+				}
+			*/
+		}
+	}
+
+	req := &gnmi.SubscribeRequest{
+		Request: &gnmi.SubscribeRequest_Subscribe{
+			Subscribe: &gnmi.SubscriptionList{
+				Prefix:       gnmiPrefix,
+				Mode:         gnmi.SubscriptionList_Mode(modeVal),
+				Encoding:     46, // "JSON_IETF_CONFIG_ONLY"
+				Subscription: subscriptions,
+				Qos:          qos,
+				//UpdatesOnly:  sc.UpdatesOnly,
+				//UseModels:    models,
+			},
+		},
+	}
+	return req, nil
 }
 
 // CreateGetRequest function creates a gnmi get request
-func (g *GnmiClient) CreateGetRequest(path *string, dataType string) (*gnmi.GetRequest, error) {
-	encodingVal, ok := gnmi.Encoding_value[strings.Replace(strings.ToUpper(g.Encoding), "-", "_", -1)]
-	if !ok {
-		return nil, fmt.Errorf("invalid encoding type '%s'", g.Encoding)
+func CreateGetRequest(path, dataType, encoding *string) (*gnmi.GetRequest, error) {
+	if encoding == nil {
+		encoding = StringPtr(defaultEncoding)
 	}
-	dti, ok := gnmi.GetRequest_DataType_value[strings.ToUpper(dataType)]
+	encodingVal, ok := gnmi.Encoding_value[strings.Replace(strings.ToUpper(defaultEncoding), "-", "_", -1)]
 	if !ok {
-		return nil, fmt.Errorf("unknown data type %s", dataType)
+		return nil, fmt.Errorf("invalid encoding type '%s'", *encoding)
+	}
+	dti, ok := gnmi.GetRequest_DataType_value[strings.ToUpper(*dataType)]
+	if !ok {
+		return nil, fmt.Errorf("unknown data type %s", *dataType)
 	}
 	req := &gnmi.GetRequest{
 		UseModels: make([]*gnmi.ModelData, 0),
@@ -145,14 +121,14 @@ func (g *GnmiClient) CreateGetRequest(path *string, dataType string) (*gnmi.GetR
 	}
 	prefix := ""
 	if prefix != "" {
-		gnmiPrefix, err := ParsePath(prefix)
+		gnmiPrefix, err := collector.ParsePath(prefix)
 		if err != nil {
 			return nil, fmt.Errorf("prefix parse error: %v", err)
 		}
 		req.Prefix = gnmiPrefix
 	}
 
-	gnmiPath, err := ParsePath(strings.TrimSpace(*path))
+	gnmiPath, err := collector.ParsePath(strings.TrimSpace(*path))
 	if err != nil {
 		return nil, fmt.Errorf("path parse error: %v", err)
 	}
@@ -161,24 +137,18 @@ func (g *GnmiClient) CreateGetRequest(path *string, dataType string) (*gnmi.GetR
 }
 
 // CreateSetRequest function creates a gnmi set request
-func (g *GnmiClient) CreateSetRequest(path *string, updateBytes []byte) (*gnmi.SetRequest, error) {
-	/*
-		updateBytes, err := json.Marshal(data)
-		if err != nil {
-			return nil, fmt.Errorf("marshal error: %v", err)
-		}
-	*/
+func CreateSetRequest(path *string, updateBytes []byte) (*gnmi.SetRequest, error) {
 	value := new(gnmi.TypedValue)
 	value.Value = &gnmi.TypedValue_JsonIetfVal{
 		JsonIetfVal: bytes.Trim(updateBytes, " \r\n\t"),
 	}
 
-	gnmiPrefix, err := CreatePrefix("", "")
+	gnmiPrefix, err := collector.CreatePrefix("", "")
 	if err != nil {
 		return nil, fmt.Errorf("prefix parse error: %v", err)
 	}
 
-	gnmiPath, err := ParsePath(strings.TrimSpace(*path))
+	gnmiPath, err := collector.ParsePath(strings.TrimSpace(*path))
 	if err != nil {
 		return nil, fmt.Errorf("path parse error: %v", err)
 	}
@@ -199,13 +169,13 @@ func (g *GnmiClient) CreateSetRequest(path *string, updateBytes []byte) (*gnmi.S
 }
 
 // CreateDeleteRequest function
-func (g *GnmiClient) CreateDeleteRequest(path *string) (*gnmi.SetRequest, error) {
-	gnmiPrefix, err := CreatePrefix("", "")
+func CreateDeleteRequest(path *string) (*gnmi.SetRequest, error) {
+	gnmiPrefix, err := collector.CreatePrefix("", "")
 	if err != nil {
 		return nil, fmt.Errorf("prefix parse error: %v", err)
 	}
 
-	gnmiPath, err := ParsePath(strings.TrimSpace(*path))
+	gnmiPath, err := collector.ParsePath(strings.TrimSpace(*path))
 	if err != nil {
 		return nil, fmt.Errorf("path parse error: %v", err)
 	}
@@ -222,11 +192,68 @@ func (g *GnmiClient) CreateDeleteRequest(path *string) (*gnmi.SetRequest, error)
 	return req, nil
 }
 
+// HandleSubscriptionResponse handes the response
+func HandleSubscriptionResponse(resp *gnmi.SubscribeResponse) ([]Update, error) {
+	updates := make([]Update, 0)
+	switch resp.GetResponse().(type) {
+	case *gnmi.SubscribeResponse_Update:
+		log.Info("SubscribeResponse_Update")
+
+		u := resp.GetUpdate().Update
+		for i, upd := range u {
+			// Path element processing
+			pathElems := make([]string, 0, len(upd.GetPath().GetElem()))
+			for _, pElem := range upd.GetPath().GetElem() {
+				log.Infof("pElem: %v", pElem)
+				pathElems = append(pathElems, pElem.GetName())
+			}
+			var pathElemSplit []string
+			var pathElem string
+			if len(pathElems) != 0 {
+				if len(pathElems) > 1 {
+					pathElemSplit = strings.Split(pathElems[len(pathElems)-1], ":")
+				} else {
+					pathElemSplit = strings.Split(pathElems[0], ":")
+				}
+
+				if len(pathElemSplit) > 1 {
+					pathElem = pathElemSplit[len(pathElemSplit)-1]
+				} else {
+					pathElem = pathElemSplit[0]
+				}
+			} else {
+				pathElem = ""
+			}
+
+			// Value processing
+			value, err := GetValue(upd.GetVal())
+			if err != nil {
+				return nil, err
+			}
+			updates = append(updates,
+				Update{
+					Path:   gnmiPathToXPath(upd.GetPath()),
+					Values: make(map[string]interface{}),
+				})
+			updates[i].Values[pathElem] = value
+		}
+	case *gnmi.SubscribeResponse_SyncResponse:
+		log.Info("SubscribeResponse_SyncResponse")
+	}
+
+	for i, u := range updates {
+		log.Infof("Path: %d, %s", i, u.Path)
+		log.Infof("Value: %v", u.Values)
+	}
+
+	return updates, nil
+}
+
 // HandleGetResponse handes the response
-func (g *GnmiClient) HandleGetResponse(response *gnmi.GetResponse) ([]update, error) {
+func HandleGetResponse(response *gnmi.GetResponse) ([]Update, error) {
 	for _, notif := range response.GetNotification() {
 
-		updates := make([]update, 0, len(notif.GetUpdate()))
+		updates := make([]Update, 0, len(notif.GetUpdate()))
 
 		for i, upd := range notif.GetUpdate() {
 			// Path element processing
@@ -253,12 +280,12 @@ func (g *GnmiClient) HandleGetResponse(response *gnmi.GetResponse) ([]update, er
 			}
 
 			// Value processing
-			value, err := getValue(upd.GetVal())
+			value, err := GetValue(upd.GetVal())
 			if err != nil {
 				return nil, err
 			}
 			updates = append(updates,
-				update{
+				Update{
 					Path:   gnmiPathToXPath(upd.GetPath()),
 					Values: make(map[string]interface{}),
 				})
@@ -277,7 +304,7 @@ func (g *GnmiClient) HandleGetResponse(response *gnmi.GetResponse) ([]update, er
 	return nil, nil
 }
 
-type update struct {
+type Update struct {
 	Path   string
 	Values map[string]interface{} `json:"values,omitempty"`
 }
@@ -294,7 +321,15 @@ func gnmiPathToXPath(p *gnmi.Path) string {
 	elems := p.GetElem()
 	numElems := len(elems)
 	for i, pe := range elems {
-		sb.WriteString(pe.GetName())
+		var p string
+		// remove srl_nokia-interfaces from srl_nokia-interfaces:interface
+		pSplit := strings.Split(pe.GetName(), ":")
+		if len(pSplit) > 1 {
+			p = pSplit[1]
+		} else {
+			p = pSplit[0]
+		}
+		sb.WriteString(p)
 		for k, v := range pe.GetKey() {
 			sb.WriteString("[")
 			sb.WriteString(k)
@@ -309,7 +344,7 @@ func gnmiPathToXPath(p *gnmi.Path) string {
 	return sb.String()
 }
 
-func getValue(updValue *gnmi.TypedValue) (interface{}, error) {
+func GetValue(updValue *gnmi.TypedValue) (interface{}, error) {
 	if updValue == nil {
 		return nil, nil
 	}
@@ -350,91 +385,4 @@ func getValue(updValue *gnmi.TypedValue) (interface{}, error) {
 		}
 	}
 	return value, nil
-}
-
-// CreatePrefix function
-func CreatePrefix(prefix, target string) (*gnmi.Path, error) {
-	if len(prefix)+len(target) == 0 {
-		return nil, nil
-	}
-	p, err := ParsePath(prefix)
-	if err != nil {
-		return nil, err
-	}
-	if target != "" {
-		p.Target = target
-	}
-	return p, nil
-}
-
-// ParsePath creates a gnmi.Path out of a p string, check if the first element is prefixed by an origin,
-// removes it from the xpath and adds it to the returned gnmiPath
-func ParsePath(p string) (*gnmi.Path, error) {
-	var origin string
-	elems := strings.Split(p, "/")
-	if len(elems) > 0 {
-		f := strings.Split(elems[0], ":")
-		if len(f) > 1 {
-			origin = f[0]
-			elems[0] = strings.Join(f[1:], ":")
-		}
-	}
-	gnmiPath, err := xpath.ToGNMIPath(strings.Join(elems, "/"))
-	if err != nil {
-		return nil, err
-	}
-	gnmiPath.Origin = origin
-	return gnmiPath, nil
-}
-
-// Capabilities sends a gnmi.CapabilitiesRequest to the target and returns a gnmi.CapabilitiesResponse and an error
-func (g *GnmiClient) Capabilities(ctx context.Context, ext ...*gnmi_ext.Extension) (*gnmi.CapabilityResponse, error) {
-	// TODO get credentials
-
-	ctx = metadata.AppendToOutgoingContext(ctx, "username", g.Username, "password", g.Password)
-	response, err := g.Client.Capabilities(ctx, &gnmi.CapabilityRequest{Extension: ext})
-	if err != nil {
-		return nil, fmt.Errorf("failed sending capabilities request: %v", err)
-	}
-	return response, nil
-}
-
-// Get sends a gnmi.GetRequest to the target *t and returns a gnmi.GetResponse and an error
-func (g *GnmiClient) Get(ctx context.Context, req *gnmi.GetRequest) (response *gnmi.GetResponse, err error) {
-	nctx, cancel := context.WithTimeout(ctx, defaultTimeout)
-	defer cancel()
-	nctx = metadata.AppendToOutgoingContext(nctx, "username", g.Username, "password", g.Password)
-	response, err = g.Client.Get(nctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("failed sending GetRequest to '%s': %v", g.Target, err)
-	}
-	return response, nil
-}
-
-// Set sends a gnmi.SetRequest to the target *t and returns a gnmi.SetResponse and an error
-func (g *GnmiClient) Set(ctx context.Context, req *gnmi.SetRequest) (response *gnmi.SetResponse, err error) {
-	nctx, cancel := context.WithTimeout(ctx, defaultTimeout)
-	defer cancel()
-	nctx = metadata.AppendToOutgoingContext(nctx, "username", g.Username, "password", g.Password)
-	response, err = g.Client.Set(nctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("failed sending SetRequest to '%s': %v", g.Target, err)
-	}
-	/*
-		for i := 0; i < 5; i++ {
-			response, err = t.Client.Set(nctx, req)
-			if err != nil {
-				log.Errorf("Try %d, Set failed: %v", i, err)
-				rand.Seed(time.Now().UnixNano())
-				r := rand.Intn(1000)
-				time.Sleep(time.Duration(r) * time.Millisecond)
-				if i == 5 {
-					return nil, fmt.Errorf("failed sending SetRequest 5 times to '%s': %v", *t.Config.Target, err)
-				}
-			} else {
-				break
-			}
-		}
-	*/
-	return response, nil
 }

@@ -29,11 +29,11 @@ func (c *Cache) Request(ctx context.Context, req *netwdevpb.CacheStatusRequest) 
 	log.Infof("Cache Status Request: Object: %v, Level: %v", req.Resource, req.Level)
 	reply := &netwdevpb.CacheStatusReply{}
 	if d, ok := c.Data[int(req.Level)][req.Resource]; ok {
-		reply := &netwdevpb.CacheStatusReply{}
+		//reply := &netwdevpb.CacheStatusReply{}
 		reply.Exists = true
 		reply.Status = d.CacheStatus
 		reply.Data = d.Config
-		log.Infof("Cache Status Reply: %v", reply)
+		log.Debugf("Cache Status Reply: %v", reply)
 		return reply, nil
 	}
 	reply.Exists = false
@@ -42,8 +42,8 @@ func (c *Cache) Request(ctx context.Context, req *netwdevpb.CacheStatusRequest) 
 
 // Update is a GRPC service that updates the cache with new information
 func (c *Cache) Update(ctx context.Context, req *netwdevpb.CacheUpdateRequest) (*netwdevpb.CacheUpdateReply, error) {
-	log.Infof("Cache Update Request: Object: %v, Level: %v", req.Resource, req.Level)
-	log.Infof("Cache Update Request: %v", req)
+	log.Debugf("Cache Update Request: Object: %v, Level: %v", req.Resource, req.Level)
+	log.Debugf("Cache Update Request: %v", req)
 	c.Mutex.Lock()
 
 	level := int(req.Level)

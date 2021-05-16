@@ -25,6 +25,7 @@ import (
 	jsonpatch "github.com/evanphx/json-patch"
 	log "github.com/sirupsen/logrus"
 
+	"github.com/netw-device-driver/netw-device-driver-gnmi/pkg/gnmic"
 	"github.com/netw-device-driver/netwdevpb"
 )
 
@@ -33,10 +34,13 @@ type Cache struct {
 	netwdevpb.UnimplementedCacheStatusServer
 	netwdevpb.UnimplementedCacheUpdateServer
 
-	Mutex         sync.RWMutex
-	Data          map[int]map[string]*ResourceData
-	Levels        []int
-	CurrentConfig []byte
+	Mutex              sync.RWMutex
+	Data               map[int]map[string]*ResourceData
+	Levels             []int
+	DataSubDeltaDelete *[]string
+	DataSubDeltaUpdate *[]string
+	ReApplyCacheData   *bool
+	CurrentConfig      []byte
 }
 
 type ResourceData struct {
@@ -44,34 +48,32 @@ type ResourceData struct {
 	CacheStatus netwdevpb.CacheStatusReply_CacheResourceStatus // Status of the resource
 }
 
-// UpdateCacheEntry updates the driver cache
-/*
-func (c *Cache) UpdateCacheEntry(o string, netwCfgMsg *netwdevpb.CacheUpdateRequest) error {
+func (c *Cache) UpdateSubscriptionDelta(subDelta *SubscriptionDelta) {
+	log.Debugf("Cache Update Subscription Delta")
 	c.Mutex.Lock()
 
-	level := int(netwCfgMsg.Level)
-	if !contains(c.Levels, level) {
-		c.Levels = append(c.Levels, level)
-		c.Data[level] = make(map[string]*Data)
+	// only update the reapply cache when it is set
+	if *subDelta.ReApplyCacheData {
+		c.ReApplyCacheData = subDelta.ReApplyCacheData
 	}
-	sort.Ints(c.Levels)
 
-	c.Data[level][o] = &Data{
-		Config: netwCfgMsg,
-		CacheStatus:   netwdevpb.CacheStatusReply_ToBeProcessed,
+	if len(*subDelta.DataSubDeltaDelete) > 0 {
+		*c.DataSubDeltaDelete = append(*c.DataSubDeltaDelete, *subDelta.DataSubDeltaDelete...)
+	}
+
+	if len(*subDelta.DataSubDeltaUpdate) > 0 {
+		*c.DataSubDeltaUpdate = append(*c.DataSubDeltaUpdate, *subDelta.DataSubDeltaUpdate...)
 	}
 
 	c.Mutex.Unlock()
-	return nil
 }
-*/
 
 // SetStatus sets the status of the data
 // l = level, o = object
 func (c *Cache) SetStatus(l int, o string, s netwdevpb.CacheStatusReply_CacheResourceStatus) error {
 	c.Mutex.Lock()
 
-	log.Infof("New Status for Level: %d, Object: %s, CacheStatus: %s", l, o, s)
+	log.Debugf("New Status for Level: %d, Object: %s, CacheStatus: %s", l, o, s)
 	if d, ok := c.Data[l][o]; ok {
 		d.CacheStatus = s
 	}
@@ -81,7 +83,7 @@ func (c *Cache) SetStatus(l int, o string, s netwdevpb.CacheStatusReply_CacheRes
 }
 
 func (c *Cache) getParentDependencyDeleteStatus(dependencies []string) bool {
-	log.Infof("Check Parent dependency status: %s", dependencies)
+	log.Debugf("Check Parent dependency status: %s", dependencies)
 	for _, l := range c.Levels {
 		for _, data := range c.Data[l] {
 			for i, ip := range data.Config.IndividualActionPath {
@@ -99,7 +101,7 @@ func (c *Cache) getParentDependencyDeleteStatus(dependencies []string) bool {
 
 // CheckMissingDependency validates the dependencies of the path
 func (c *Cache) CheckMissingDependency(dependencies []string) bool {
-	log.Infof("Check missing dependencies: %s", dependencies)
+	log.Debugf("Check missing dependencies: %s", dependencies)
 	for _, l := range c.Levels {
 		for o, data := range c.Data[l] {
 			if len(dependencies) == 0 {
@@ -107,9 +109,9 @@ func (c *Cache) CheckMissingDependency(dependencies []string) bool {
 				return false
 			}
 			for _, dep := range dependencies {
-				log.Infof("Dependency: %s To be checked withing Object: %s", o, dep)
+				log.Debugf("Dependency: %s To be checked within Object: %s", o, dep)
 				for _, dp := range data.Config.IndividualActionPath {
-					log.Infof("Object: %s, ObjDependency: %s Global Dependency: %s", o, dep, dp)
+					log.Debugf("Object: %s, ObjDependency: %s Global Dependency: %s", o, dep, dp)
 					if strings.Contains(dp, dep) {
 						// we can check the status since we processed the data before
 						if data.CacheStatus != netwdevpb.CacheStatusReply_DependencyMissing {
@@ -149,9 +151,38 @@ func (c *Cache) CheckCache(dep string) (int, string, bool) {
 
 // ReconcileCache reconciles the cache
 func (d *DeviceDriver) ReconcileCache() error {
+	log.Infof("reconcile cache...")
+
+	// show subdelta
+	log.Infof("SubDelta Cache ReApplyCacheData: %t", *d.Cache.ReApplyCacheData)
+	log.Infof("SubDelta Cache DataSubDeltaDelete: %v", *d.Cache.DataSubDeltaDelete)
+	log.Infof("SubDelta Cache DataSubDeltaUpdate: %v", *d.Cache.DataSubDeltaUpdate)
+
+	for _, ip := range *d.Cache.DataSubDeltaDelete {
+		// process to delete the object via gnmi
+		if err := d.deleteDeviceDataGnmi(&ip); err != nil {
+			log.WithError(err).Errorf("GNMI delete process failed for subscription delta, path: %s", ip)
+		} else {
+			// only update the individual status since we assume the aggregate object is success
+			log.Infof("GNMI delete processed successfully for subscription delta, path: %s", ip)
+		}
+	}
+
+	for _, ip := range *d.Cache.DataSubDeltaUpdate {
+		// process to delete the object via gnmi
+		if err := d.deleteDeviceDataGnmi(&ip); err != nil {
+			log.WithError(err).Errorf("GNMI delete process failed for subscription delta, path: %s", ip)
+		} else {
+			// only update the individual status since we assume the aggregate object is success
+			log.Infof("GNMI delete processed successfully for subscription delta, path: %s", ip)
+		}
+	}
+
 	// SHOW CACHE STATUS
-	log.Info("Show STATUS before DELETE PRE-PROCESSING")
-	d.Cache.showCacheStatus()
+	log.Debugf("Show STATUS before DELETE PRE-PROCESSING")
+	if *d.Debug {
+		d.Cache.showCacheStatus()
+	}
 
 	// PROCESS DELETE ACTIONS
 	deletePaths := make(map[int]map[string]*ResourceData)
@@ -161,7 +192,7 @@ func (d *DeviceDriver) ReconcileCache() error {
 			if len(data.Config.Dependencies) == 0 {
 				// no object dependencies
 				if data.Config.Action == netwdevpb.CacheUpdateRequest_Delete {
-					log.Info("Delete pending Addition, no dependencies")
+					log.Debugf("Delete pending Addition, no dependencies")
 					d.Cache.SetStatus(l, o, netwdevpb.CacheStatusReply_DeletePending)
 					// update deletePath; if the object did not exist initialize it and add the data or just add the data
 					if _, ok := deletePaths[l]; !ok {
@@ -173,7 +204,7 @@ func (d *DeviceDriver) ReconcileCache() error {
 				// check object dependencies
 				for _, dep := range data.Config.Dependencies {
 					// object's parent dependency gets deleted
-					log.Infof("Delete dependencies: object: %s, dep: %s, ", o, dep)
+					log.Debugf("Delete dependencies: object: %s, dep: %s, ", o, dep)
 					// dl = dependency level, do = dependency object
 					dl, do, parentFound := d.Cache.CheckCache(dep)
 					if parentFound {
@@ -182,7 +213,7 @@ func (d *DeviceDriver) ReconcileCache() error {
 						if d.Cache.Data[dl][do].CacheStatus == netwdevpb.CacheStatusReply_DeletePending || d.Cache.Data[dl][do].CacheStatus == netwdevpb.CacheStatusReply_DeletePendingWithParentDependency {
 							switch d.Cache.Data[l][o].Config.Action {
 							case netwdevpb.CacheUpdateRequest_Delete:
-								log.Info("Delete pending Addition with parent dependency, since parent object will be deleted")
+								log.Debugf("Delete pending Addition with parent dependency, since parent object will be deleted")
 								// the parent is to be deleted, so the child object will be deleted as well
 								// -> we need to update the cache status but no gnmi delete
 								d.Cache.SetStatus(l, o, netwdevpb.CacheStatusReply_DeletePendingWithParentDependency)
@@ -192,14 +223,14 @@ func (d *DeviceDriver) ReconcileCache() error {
 								}
 								deletePaths[l][o] = data
 							default:
-								log.Info("No delete pending Addition, since parent object will be deleted, but child object remains")
+								log.Debugf("No delete pending Addition, since parent object will be deleted, but child object remains")
 								// dont delete the object since the parent just gets deleted and the object is still valid in the config
 								d.Cache.SetStatus(l, o, netwdevpb.CacheStatusReply_DependencyMissing)
 							}
 						} else {
 							// the parent object exists, but will not be deleted so we need to delete the child if the Action is delete
 							if d.Cache.Data[l][o].Config.Action == netwdevpb.CacheUpdateRequest_Delete {
-								log.Info("Delete pending Addition, parent object exists and not being deleted")
+								log.Debugf("Delete pending Addition, parent object exists and not being deleted")
 								d.Cache.SetStatus(l, o, netwdevpb.CacheStatusReply_DeletePending)
 								// update deletePath; if the object did not exist initialize it and add the data or just add the data
 								if _, ok := deletePaths[l]; !ok {
@@ -226,10 +257,12 @@ func (d *DeviceDriver) ReconcileCache() error {
 		}
 	}
 
-	log.Info("Show STATUS before DELETE GNMI")
-	d.Cache.showCacheStatus()
+	log.Debugf("Show STATUS before DELETE GNMI")
+	if *d.Debug {
+		d.Cache.showCacheStatus()
+	}
 
-	log.Infof("deletePaths: %v", deletePaths)
+	log.Debugf("deletePaths: %v", deletePaths)
 
 	// the delete should happen per level starting from the top since the delete hierarchy is respected
 	// if interface and subinterfaace get delete, only delete interface via gnmi as the dependnt object
@@ -268,7 +301,7 @@ func (d *DeviceDriver) ReconcileCache() error {
 					} else {
 						// only update the individual status since we assume the aggregate object is success
 						data.Config.IndividualActionPathSuccess[i] = true
-						log.Infof("GNMI delete processed successfully, object: %s, path: %s", o, ip)
+						log.Debugf("GNMI delete processed successfully, object: %s, path: %s", o, ip)
 					}
 				case netwdevpb.CacheStatusReply_DeletePendingWithParentDependency:
 					// check if the parent got deleted successfully and only than delete the object and cry success
@@ -276,7 +309,7 @@ func (d *DeviceDriver) ReconcileCache() error {
 					if d.Cache.getParentDependencyDeleteStatus(data.Config.Dependencies) {
 						// parent delete was successfull
 						data.Config.IndividualActionPathSuccess[i] = true
-						log.Infof("Parent GNMI delete processed successfully, object: %s, path: %s", o, ip)
+						log.Debugf("Parent GNMI delete processed successfully, object: %s, path: %s", o, ip)
 					} else {
 						// parent delete was NOT successfull
 						data.CacheStatus = netwdevpb.CacheStatusReply_ToBeProcessed // so in the next iteration we retry
@@ -316,8 +349,10 @@ func (d *DeviceDriver) ReconcileCache() error {
 
 	// PREPROCESS UPDATE ACTIONS
 
-	log.Info("Show STATUS BEFORE UPDATE PROCESSING AND AFTER DELETE PROCESSING")
-	d.Cache.showCacheStatus()
+	log.Debugf("Show STATUS BEFORE UPDATE PROCESSING AND AFTER DELETE PROCESSING")
+	if *d.Debug {
+		d.Cache.showCacheStatus()
+	}
 
 	var mergedData interface{}
 	var mergedPath string
@@ -333,15 +368,15 @@ func (d *DeviceDriver) ReconcileCache() error {
 					d.Cache.SetStatus(l, o, netwdevpb.CacheStatusReply_DependencyMissing)
 				} else {
 					// merge the data based on the UpdateActionPath
-					log.Infof("New Update Path: aggregate path %s, individual path %s, current Update Path: %s", data.Config.AggregateActionPath, data.Config.IndividualActionPath, mergedPath)
+					log.Debugf("New Update Path: aggregate path %s, individual path %s, current Update Path: %s", data.Config.AggregateActionPath, data.Config.IndividualActionPath, mergedPath)
 					// merge or insert the data object per object rather than through a full list
 					// We merge per individual path the data
 					for i, d := range data.Config.ConfigData {
-						log.Infof("Start MERGE; individual path: %s, aggregate path: %s, mergedPath: %s", data.Config.IndividualActionPath[i], data.Config.AggregateActionPath, mergedPath)
+						log.Debugf("Start MERGE; individual path: %s, aggregate path: %s, mergedPath: %s", data.Config.IndividualActionPath[i], data.Config.AggregateActionPath, mergedPath)
 						var d1 interface{}
 						json.Unmarshal(d, &d1)
-						log.Debugf("Start MERGE; new data: %v", d1)
-						log.Debugf("Start MERGE; current merged data: %v", mergedData)
+						log.Infof("Start MERGE; new data: %v", d1)
+						log.Infof("Start MERGE; current merged data: %v", mergedData)
 						mergedPath, mergedData, err = startMerge(mergedPath, mergedData, data.Config.IndividualActionPath[i], data.Config.AggregateActionPath, d)
 						if err != nil {
 							log.WithError(err).Error("merge error")
@@ -354,8 +389,10 @@ func (d *DeviceDriver) ReconcileCache() error {
 	}
 
 	// PROCESS UPDATE AND SHOW CACHE BEFORE UPDATE
-	log.Info("Show STATUS before UPDATE")
-	d.Cache.showCacheStatus()
+	log.Debugf("Show STATUS before UPDATE")
+	if *d.Debug {
+		d.Cache.showCacheStatus()
+	}
 
 	newMergedConfig, err := json.Marshal(mergedData)
 	if err != nil {
@@ -363,8 +400,24 @@ func (d *DeviceDriver) ReconcileCache() error {
 	}
 
 	if jsonpatch.Equal(d.Cache.CurrentConfig, newMergedConfig) {
-		log.Info("The new merged data is EQUAL to the current config. DO NOTHING")
-		d.UpdateCacheAfterUpdate(true)
+		if *d.Cache.ReApplyCacheData {
+			log.Info("The new merged data is EQUAL to the current config, but an object got deleted -> REAPPLY CACHE")
+			if len(mergedPath) > 0 {
+				updateSuccess := true
+				if err := d.updateDeviceDataGnmi(&mergedPath, newMergedConfig); err != nil {
+					// TODO check failure status
+					log.WithError(err).Errorf("Merged update process FAILED, path: %s", mergedPath)
+					updateSuccess = false
+				}
+				log.Infof("Merged update process SUCCEEDED, path: %s", mergedPath)
+				// update Cache based on the result of the update
+				d.UpdateCacheAfterUpdate(updateSuccess)
+			}
+		} else {
+			log.Info("The new merged data is EQUAL to the current config. DO NOTHING")
+			d.UpdateCacheAfterUpdate(true)
+		}
+
 	} else {
 		log.Info("The new merged data is DIFFERENT, apply to the device")
 		log.Infof("MergedUpdatePath: %s \n", mergedPath)
@@ -384,7 +437,10 @@ func (d *DeviceDriver) ReconcileCache() error {
 			d.UpdateCacheAfterUpdate(updateSuccess)
 		}
 	}
-	log.Info("Show STATUS after UPDATE")
+	*d.Cache.ReApplyCacheData = false
+	*d.Cache.DataSubDeltaDelete = make([]string, 0)
+	*d.Cache.DataSubDeltaUpdate = make([]string, 0)
+	log.Info("Show CACHE STATUS after UPDATE")
 	d.Cache.showCacheStatus()
 
 	return nil
@@ -399,7 +455,7 @@ func (d *DeviceDriver) UpdateCacheAfterUpdate(updateSuccess bool) error {
 					// reiniliaze the individualPath success
 					data.Config.IndividualActionPathSuccess = make([]bool, 0)
 					for _, ip := range data.Config.IndividualActionPath {
-						log.Infof("update processed successfully, object: %s, path: %s", o, ip)
+						log.Debugf("update processed successfully, object: %s, path: %s", o, ip)
 						data.Config.IndividualActionPathSuccess = append(data.Config.IndividualActionPathSuccess, true)
 					}
 					d.Cache.SetStatus(l, o, netwdevpb.CacheStatusReply_UpdateProcessedSuccess)
@@ -408,7 +464,7 @@ func (d *DeviceDriver) UpdateCacheAfterUpdate(updateSuccess bool) error {
 					// reiniliaze the individualPath success
 					data.Config.IndividualActionPathSuccess = make([]bool, 0)
 					for _, ip := range data.Config.IndividualActionPath {
-						log.Infof("update processed successfully, object: %s, path: %s", o, ip)
+						log.Debugf("update processed successfully, object: %s, path: %s", o, ip)
 						data.Config.IndividualActionPathSuccess = append(data.Config.IndividualActionPathSuccess, false)
 					}
 					d.Cache.SetStatus(l, o, netwdevpb.CacheStatusReply_UpdateProcessedFailed)
@@ -419,96 +475,36 @@ func (d *DeviceDriver) UpdateCacheAfterUpdate(updateSuccess bool) error {
 	return nil
 }
 
-/*
-func (d *DeviceDriver) updateK8sOperatorThroughNats(ok bool, op netwdevpb.Config_ActionType, o string, data *Data2) error {
-	var resp *netwdevpb.Config
-	switch op {
-	case netwdevpb.Config_Delete:
-		resp = &netwdevpb.Config{
-			Kind:                        netwdevpb.Config_Response,
-			ApiGroup:                    data.Config.ApiGroup,
-			Resource:                    data.Config.Resource,
-			ResourceName:                data.Config.ResourceName,
-			Namespace:                   data.Config.Namespace,
-			Action:                      op,
-			AggregateActionPath:         data.Config.AggregateActionPath,
-			AggregateActionPathSuccess:  data.Config.AggregateActionPathSuccess,
-			IndividualActionPath:        data.Config.IndividualActionPath,
-			IndividualActionPathSuccess: data.Config.IndividualActionPathSuccess,
-			ConfigData:                  nil,
-			StatusData:                  nil,
-		}
-	case netwdevpb.Config_Update:
-		resp = &netwdevpb.Config{
-			Kind:                        netwdevpb.Config_Response,
-			ApiGroup:                    data.Config.ApiGroup,
-			Resource:                    data.Config.Resource,
-			ResourceName:                data.Config.ResourceName,
-			Namespace:                   data.Config.Namespace,
-			Action:                      op,
-			AggregateActionPath:         data.Config.AggregateActionPath,
-			AggregateActionPathSuccess:  data.Config.AggregateActionPathSuccess,
-			IndividualActionPath:        data.Config.IndividualActionPath,
-			IndividualActionPathSuccess: data.Config.IndividualActionPathSuccess,
-			ConfigData:                  nil,
-			StatusData:                  nil,
-		}
-	default:
-		return fmt.Errorf("unknown action type: %s", op)
-	}
-
-	// response topic: ndd.<resource>.<resourcename>.<device>
-	topic := data.Config.ApiGroup + "." + strcase.UpperCamelCase(data.Config.Resource) + "." + strcase.UpperCamelCase(data.Config.ResourceName)
-	n := &natsc.Client{
-		Server: *d.NatsServer,
-		Topic:  topic,
-	}
-	log.Infof("Published Nats response: topic: %s response: %v", topic, resp)
-	n.Publish(resp)
-	return nil
-}
-*/
-
 func (d *DeviceDriver) updateDeviceDataGnmi(p *string, data []byte) error {
-	req, err := d.GnmiClient.CreateSetRequest(p, data)
+
+	req, err := gnmic.CreateSetRequest(p, data)
 	if err != nil {
 		log.WithError(err).Error("error creating set request")
 		return err
 	}
-	resp, err := d.GnmiClient.Set(context.Background(), req)
+	resp, err := d.Target.Set(context.Background(), req)
 	if err != nil {
 		log.WithError(err).Error("error sending set request for update")
 		return err
 	}
-	log.Infof("response: %v", resp)
+	log.Debugf("response: %v", resp)
 
-	/*
-		u, err := d.Client.HandleSetRespone(response)
-		if err != nil {
-			return  err
-		}
-	*/
 	return nil
 }
 
 func (d *DeviceDriver) deleteDeviceDataGnmi(p *string) error {
-	req, err := d.GnmiClient.CreateDeleteRequest(p)
+
+	req, err := gnmic.CreateDeleteRequest(p)
 	if err != nil {
 		log.WithError(err).Error("error creating set request")
 		return err
 	}
-	resp, err := d.GnmiClient.Set(context.Background(), req)
+	resp, err := d.Target.Set(context.Background(), req)
 	if err != nil {
 		log.WithError(err).Error("error sending set request for delete")
 		return err
 	}
-	log.Infof("response: %v", resp)
+	log.Debugf("response: %v", resp)
 
-	/*
-		u, err := d.Client.HandleSetRespone(response)
-		if err != nil {
-			return  err
-		}
-	*/
 	return nil
 }
