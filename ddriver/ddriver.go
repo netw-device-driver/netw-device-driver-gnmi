@@ -18,6 +18,7 @@ package ddriver
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -25,8 +26,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/karimra/gnmic/collector"
 	nddv1 "github.com/netw-device-driver/netw-device-controller/api/v1"
-	"github.com/netw-device-driver/netw-device-driver-gnmi/pkg/gnmic"
 	"github.com/netw-device-driver/netwdevpb"
 	"github.com/openconfig/gnmi/proto/gnmi_ext"
 	log "github.com/sirupsen/logrus"
@@ -37,6 +38,7 @@ import (
 const timer = 10
 
 // DeviceeDetails struct
+/*
 type DeviceDetails struct {
 	// the Kind of hardware
 	Kind *string `json:"kind,omitempty"`
@@ -45,6 +47,7 @@ type DeviceDetails struct {
 	// the Serial Number of the hardware
 	SerialNumber *string `json:"serialNumber,omitempty"`
 }
+*/
 
 // DeviceDriver contains the device driver information
 type DeviceDriver struct {
@@ -52,11 +55,16 @@ type DeviceDriver struct {
 	CacheServerPort    *int
 	CacheServerAddress *string
 	DeviceName         *string
-	GnmiClient         *gnmic.GnmiClient
+	TargetConfig       *collector.TargetConfig
+	Target             *collector.Target
+	TargetCollector    *Collector
 	K8sClient          *client.Client
 	NetworkNodeKind    *string
-	DeviceDetails      *DeviceDetails
+	DeviceDetails      *nddv1.DeviceDetails
 	LatestConfig       map[string]interface{}
+	Subscriptions      *[]string
+	ExceptionPaths     *[]string
+	Debug              *bool
 
 	Cache  *Cache
 	StopCh chan struct{}
@@ -65,15 +73,6 @@ type DeviceDriver struct {
 
 // Option is a function to initialize the options of the device driver
 type Option func(d *DeviceDriver)
-
-// WithNatsServer initializes the nats server in the device driver
-/*
-func WithNatsServer(s *string) Option {
-	return func(d *DeviceDriver) {
-		d.NatsServer = s
-	}
-}
-*/
 
 // WithCacheServer initializes the cache server in the device driver
 func WithCacheServer(s *string) Option {
@@ -98,76 +97,150 @@ func WithK8sClient(c *client.Client) Option {
 	}
 }
 
-// GnmiProtocolOption is a function to initialize the options of the protocol
-type GnmiProtocolOption func(g *gnmic.GnmiClient)
-
-// WithTarget initializes the address in the protocol of the  device driver
-func WithTarget(t *string) GnmiProtocolOption {
-	return func(g *gnmic.GnmiClient) {
-		g.Target = *t
+// WithTargetName initializes the name in the gnmi target
+func WithTargetName(n *string) Option {
+	return func(d *DeviceDriver) {
+		d.TargetConfig.Name = *n
 	}
 }
 
-// WithUsername initializes the username in the protocol of the  device driver
-func WithUsername(u *string) GnmiProtocolOption {
-	return func(g *gnmic.GnmiClient) {
-		g.Username = *u
+// WithTargetAddress initializes the address in the gnmi target
+func WithTargetAddress(t *string) Option {
+	return func(d *DeviceDriver) {
+		d.TargetConfig.Address = *t
 	}
 }
 
-// WithPassword initializes the password in the protocol of the device driver
-func WithPassword(p *string) GnmiProtocolOption {
-	return func(g *gnmic.GnmiClient) {
-		g.Password = *p
+// WithUsername initializes the username
+func WithUsername(u *string) Option {
+	return func(d *DeviceDriver) {
+		d.TargetConfig.Username = u
 	}
 }
 
-// WithSkipVerify initializes the password in the protocol of the device driver
-func WithSkipVerify(b bool) GnmiProtocolOption {
-	return func(g *gnmic.GnmiClient) {
-		g.SkipVerify = b
+// WithPassword initializes the password
+func WithPassword(p *string) Option {
+	return func(d *DeviceDriver) {
+		d.TargetConfig.Password = p
+	}
+}
+
+// WithSkipVerify initializes skipVerify
+func WithSkipVerify(b *bool) Option {
+	return func(d *DeviceDriver) {
+		d.TargetConfig.SkipVerify = b
+	}
+}
+
+// WithInsecure initializes insecure
+func WithInsecure(b *bool) Option {
+	return func(d *DeviceDriver) {
+		d.TargetConfig.Insecure = b
+	}
+}
+
+// WithTLSCA initializes TLSCA
+func WithTLSCA(t *string) Option {
+	return func(d *DeviceDriver) {
+		d.TargetConfig.TLSCA = t
+	}
+}
+
+// WithTLSCert initializes TLSCert
+func WithTLSCert(t *string) Option {
+	return func(d *DeviceDriver) {
+		d.TargetConfig.TLSCert = t
+	}
+}
+
+// WithTLSKey initializes TLSKey
+func WithTLSKey(t *string) Option {
+	return func(d *DeviceDriver) {
+		d.TargetConfig.TLSKey = t
+	}
+}
+
+// WithGzip initializes targetconfig
+func WithGzip(b *bool) Option {
+	return func(d *DeviceDriver) {
+		d.TargetConfig.Gzip = b
+	}
+}
+
+// WithTimeout initializes the timeout in the protocol of the device driver
+func WithTimeout(t time.Duration) Option {
+	return func(d *DeviceDriver) {
+		d.TargetConfig.Timeout = t
 	}
 }
 
 // WithEncoding initializes the encoding in the protocol of the device driver
-func WithEncoding(e *string) GnmiProtocolOption {
-	return func(g *gnmic.GnmiClient) {
-		g.Encoding = *e
+/*
+func WithEncoding(e *string) Option {
+	return func(d *DeviceDriver) {
+		d.TargetConfig.Encoding = *e
+	}
+}
+*/
+
+func WithDebug(b *bool) Option {
+	return func(d *DeviceDriver) {
+		d.Debug = b
 	}
 }
 
 // NewDeviceDriver function defines a new device driver
-func NewDeviceDriver(opts []Option, popts ...GnmiProtocolOption) *DeviceDriver {
+func NewDeviceDriver(opts ...Option) *DeviceDriver {
 	log.Info("initialize new device driver ...")
+	dataSubDeltaDelete := make([]string, 0)
+	dataSubDeltaUpdate := make([]string, 0)
+	var x1 interface{}
+	empty, err := json.Marshal(x1)
 	d := &DeviceDriver{
-		//NatsServer:         new(string),
 		CacheServerAddress: new(string),
 		DeviceName:         new(string),
+		DeviceDetails:      new(nddv1.DeviceDetails),
+		TargetConfig:       new(collector.TargetConfig),
 		LatestConfig:       make(map[string]interface{}),
 		K8sClient:          new(client.Client),
 		Cache: &Cache{
-			//Data:   make(map[int]map[string]*Data),
-			Data:   make(map[int]map[string]*ResourceData),
-			Levels: make([]int, 0),
+			Data:               make(map[int]map[string]*ResourceData),
+			Levels:             make([]int, 0),
+			DataSubDeltaDelete: &dataSubDeltaDelete,
+			DataSubDeltaUpdate: &dataSubDeltaUpdate,
+			ReApplyCacheData:   new(bool),
+			CurrentConfig:      empty,
 		},
 		StopCh: make(chan struct{}),
+		Debug:  new(bool),
+		//Subscriptions:  new([]string),
+		//ExceptionPaths: new([]string),
 	}
 
 	for _, o := range opts {
 		o(d)
 	}
 
-	d.GnmiClient = gnmic.NewGnmiClient()
-	for _, o := range popts {
-		o(d.GnmiClient)
-	}
-	log.Infof("Client: %v", *d.GnmiClient)
-	if err := d.GnmiClient.Initialize(); err != nil {
+	d.Target = collector.NewTarget(d.TargetConfig)
+
+	d.Ctx = context.Background()
+	err = d.Target.CreateGNMIClient(d.Ctx, grpc.WithBlock()) // TODO add dialopts
+	if err != nil {
 		log.WithError(err).Error("unable to setup the GNMI connection")
 		os.Exit(1)
 	}
 
+	d.TargetCollector = NewCollector(d.Target)
+
 	return d
+}
+
+func (d *DeviceDriver) InitExceptionPaths(eps *[]string) {
+	d.ExceptionPaths = eps
+}
+
+func (d *DeviceDriver) InitSubscriptions(subs *[]string) {
+	d.Subscriptions = subs
 }
 
 // InitDeviceDriverControllers initializes the device driver controller
@@ -178,16 +251,9 @@ func (d *DeviceDriver) InitDeviceDriverControllers() error {
 	defer close(d.StopCh)
 
 	// Create a context.
-	ctx, cancel := context.WithCancel(context.Background())
+	//ctx, cancel := context.WithCancel(context.Background())
 
-	d.Ctx = ctx
-
-	// start nats device driver
-	/*
-		go func() {
-			d.StartNatsSubscription()
-		}()
-	*/
+	d.Ctx = context.Background()
 
 	// start reconcile device driver
 	go func() {
@@ -199,13 +265,18 @@ func (d *DeviceDriver) InitDeviceDriverControllers() error {
 		d.StartCacheGRPCServer()
 	}()
 
+	// start gnmi subscription handler
+	go func() {
+		d.StartGnmiSubscriptionHandler()
+	}()
+
 	select {
 	case <-d.Ctx.Done():
 		log.Info("context cancelled")
 	}
 	close(d.StopCh)
 
-	cancel()
+	//cancel()
 
 	return nil
 }
@@ -214,7 +285,7 @@ func (d *DeviceDriver) InitDeviceDriverControllers() error {
 func (d *DeviceDriver) StartCacheGRPCServer() {
 	log.Info("Starting cache GRPC server...")
 
-	// create a listener on TCP port 7777
+	// create a listener on a specific address:port
 	lis, err := net.Listen("tcp", *d.CacheServerAddress)
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
@@ -255,70 +326,38 @@ func (d *DeviceDriver) StartReconcileProcess() {
 	}
 }
 
-// StartNatsSubscription starts the nats subscription process
-/*
-func (d *DeviceDriver) StartNatsSubscription() {
-	topic := "ndd." + *d.DeviceName + ".*.*"
-	log.Infof("Starting nats subscribe...; topic: %s", topic)
-	// Connect Options.
-	opts := []nats.Option{nats.Name(fmt.Sprintf("NATS Subscriber %s", topic))}
-	opts = d.SetupNatsConnOptions(opts)
+func (d *DeviceDriver) StartGnmiSubscriptionHandler() {
+	log.Info("Starting cache GNMI subscription...")
 
-	// Connect to NATS
-	nc, err := nats.Connect(*d.NatsServer, opts...)
-	if err != nil {
-		log.Error("Nats connect error", "Error", err)
-		os.Exit(0)
+	d.TargetCollector.SubscriptionsMutex.RLock()
+	if _, ok := d.TargetCollector.Subscriptions["ConfigChangesubscription"]; !ok {
+		go d.TargetCollector.StartSubscription(d.Ctx, StringPtr("ConfigChangesubscription"), d.Subscriptions)
 	}
+	d.TargetCollector.SubscriptionsMutex.RUnlock()
 
-	nc.Subscribe(topic, func(msg *nats.Msg) {
-		netwCfgMsg := &netwdevpb.CacheUpdateRequest{}
-		if err = proto.Unmarshal(msg.Data, netwCfgMsg); err != nil {
-			log.WithError(err).Error("unmarchal error")
+	chanSubResp, chanSubErr := d.Target.ReadSubscriptions()
+
+	for {
+		select {
+		case resp := <-chanSubResp:
+			log.Infof("SubRsp Response %v", resp)
+			d.validateDiff(resp.Response)
+		case tErr := <-chanSubErr:
+			log.Errorf("subscribe error: %v", tErr)
+			time.Sleep(60 * time.Second)
+		case <-d.StopCh:
+			log.Info("Stopping subscription process")
+			return
 		}
-	})
-	nc.Flush()
-
-	if err := nc.LastError(); err != nil {
-		log.WithError(err).Error("Nats subscribe error")
-		os.Exit(0)
-	} else {
-		log.Info("Subscribe info",
-			"Subject", topic)
 	}
 }
-*/
-
-// SetupNatsConnOptions defines the nats connection options
-/*
-func (d *DeviceDriver) SetupNatsConnOptions(opts []nats.Option) []nats.Option {
-	totalWait := 10 * time.Minute
-	reconnectDelay := time.Second
-
-	opts = append(opts, nats.ReconnectWait(reconnectDelay))
-	opts = append(opts, nats.MaxReconnects(int(totalWait/reconnectDelay)))
-	opts = append(opts, nats.DisconnectHandler(func(nc *nats.Conn) {
-		log.Infof("Disconnected: will attempt reconnects for %.0fm", totalWait.Minutes())
-	}))
-	opts = append(opts, nats.ReconnectHandler(func(nc *nats.Conn) {
-		log.Infof("Reconnected [%s] url", nc.ConnectedUrl())
-	}))
-	opts = append(opts, nats.ClosedHandler(func(nc *nats.Conn) {
-		log.WithError(nc.LastError()).Error("Exiting")
-	}))
-	return opts
-}
-*/
 
 // DiscoverDeviceDetails discovers the device details
-
 func (d *DeviceDriver) DiscoverDeviceDetails() error {
 	log.Info("verifying gnmi capabilities...")
 
-	d.Ctx = context.Background()
-
 	ext := new(gnmi_ext.Extension)
-	resp, err := d.GnmiClient.Capabilities(d.Ctx, ext)
+	resp, err := d.Target.Capabilities(d.Ctx, ext)
 	if err != nil {
 		return fmt.Errorf("failed sending capabilities request: %v", err)
 	}
@@ -334,10 +373,10 @@ func (d *DeviceDriver) DiscoverDeviceDetails() error {
 
 	log.Infof("gnmi connectivity verified; response: %s, networkNodeInfo %s", resp.GNMIVersion, *d.NetworkNodeKind)
 
-	dDetails := &nddv1.DeviceDetails{}
+	//dDetails := &nddv1.DeviceDetails{}
 	switch *d.NetworkNodeKind {
 	case "nokia_srl":
-		dDetails, err = d.DiscoverDeviceDetailsSRL()
+		d.DeviceDetails, err = d.DiscoverDeviceDetailsSRL()
 		if err != nil {
 			return err
 		}
@@ -349,13 +388,12 @@ func (d *DeviceDriver) DiscoverDeviceDetails() error {
 		// TODO add other devices
 	}
 
-	log.Infof("Device details: %v", dDetails)
+	log.Infof("Device details: %v", d.DeviceDetails)
 	log.Infof("LatestConfig: %v", d.LatestConfig)
 
-	if err := d.NetworkDeviceUpdate(dDetails, nddv1.DiscoveryStatusReady); err != nil {
+	if err := d.NetworkDeviceUpdate(d.DeviceDetails, nddv1.DiscoveryStatusReady); err != nil {
 		return err
 	}
 
 	return nil
-
 }

@@ -54,7 +54,7 @@ func InitFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&deviceName, "device-name", "leaf1",
 		"Name of the device the driver serves")
 
-	fs.BoolVar(&debug, "debug", false,
+	fs.BoolVar(&debug, "debug", true,
 		"Debug control")
 }
 
@@ -105,14 +105,13 @@ func main() {
 	k8sclopts := client.Options{
 		Scheme: scheme,
 	}
-
 	c, err := client.New(config.GetConfigOrDie(), k8sclopts)
 	if err != nil {
 		fmt.Println("failed to create client")
 		os.Exit(1)
 	}
 
-	// get Network node information -> target infor, creds info, etc
+	// get Network node information -> target info, creds info, etc
 	nnKey := types.NamespacedName{
 		Namespace: "default",
 		Name:      deviceName,
@@ -140,26 +139,77 @@ func main() {
 		ddriver.WithCacheServer(&cacheServerAddress),
 		ddriver.WithDeviceName(&deviceName),
 		ddriver.WithK8sClient(&c),
-	}
-
-	popts := []ddriver.GnmiProtocolOption{
-		ddriver.WithTarget(nn.Spec.Target.Address),
+		ddriver.WithTargetName(&deviceName),
+		ddriver.WithTargetAddress(nn.Spec.Target.Address),
 		ddriver.WithUsername(&username),
 		ddriver.WithPassword(&password),
-		ddriver.WithSkipVerify(*nn.Spec.Target.SkipVerify),
-		ddriver.WithEncoding(nn.Spec.Target.Encoding),
+		ddriver.WithSkipVerify(nn.Spec.Target.SkipVerify),
+		ddriver.WithInsecure(ddriver.BoolPtr(false)),
+		ddriver.WithTLSCA(ddriver.StringPtr("")),
+		ddriver.WithTLSCert(ddriver.StringPtr("")),
+		ddriver.WithTLSKey(ddriver.StringPtr("")),
+		ddriver.WithGzip(ddriver.BoolPtr(false)),
+		ddriver.WithTimeout(10 * time.Second),
+		//ddriver.WithEncoding(nn.Spec.Target.Encoding),
+		ddriver.WithDebug(&debug),
 	}
-	d := ddriver.NewDeviceDriver(opts, popts...)
+
+	d := ddriver.NewDeviceDriver(opts...)
 
 	for {
 		if err := d.DiscoverDeviceDetails(); err != nil {
-			// TODO update status in k8s API
+			// update status with nil information
+			d.DeviceDetails = &nddv1.DeviceDetails{
+				HostName: &deviceName,
+				Kind: new(string),
+				SwVersion: new(string),
+				MacAddress: new(string),
+				SerialNumber: new(string),
+			}
+			if err := d.NetworkDeviceUpdate(d.DeviceDetails, nddv1.DiscoveryStatusNotReady); err != nil {
+				log.WithError(err).Error("Could not update Network Device State")
+			}
 			log.WithError(err).Error("Network Node discovery failed")
 			time.Sleep(60 * time.Second)
 		} else {
 			break
 		}
 	}
+
+	// get ConfigMap information -> subscription and subscription exceptions
+	var namespace string
+	var cmName string
+	switch *d.NetworkNodeKind {
+	case "nokia_srl":
+		namespace = "nddriver-system"
+		cmName = "srl-k8s-subscription-config"
+	}
+	log.Infof("kind: %s", *d.NetworkNodeKind)
+	log.Infof("namespace: %s", namespace)
+	log.Infof("cmName: %s", cmName)
+	cmKey := types.NamespacedName{
+		Namespace: namespace,
+		Name:      cmName,
+	}
+	cm := &corev1.ConfigMap{}
+	if err := c.Get(context.TODO(), cmKey, cm); err != nil {
+		log.WithError(err).Error("Failed to get ConfigMap")
+	}
+
+	log.Infof("ConfigMap Data: %v", cm.Data)
+	if ep, ok := cm.Data["excption-paths"]; ok {
+		eps := strings.Split(ep, " ")
+		log.Infof("ConfigMap excption-paths data: %v", eps)
+		d.InitExceptionPaths(&eps)
+	}
+	log.Infof("ConfigMap exception-paths data: %v", *d.ExceptionPaths)
+
+	if sp, ok := cm.Data["subscriptions"]; ok {
+		sps := strings.Split(sp, " ")
+		log.Infof("ConfigMap subscriptions data: %v", sps)
+		d.InitSubscriptions(&sps)
+	}
+	log.Infof("ConfigMap subscriptions data: %v", *d.Subscriptions)
 
 	d.InitDeviceDriverControllers()
 }
