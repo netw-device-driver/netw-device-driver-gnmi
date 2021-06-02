@@ -117,7 +117,7 @@ func (d *DeviceDriver) DiscoverDeviceDetailsSRL() (*nddv1.DeviceDetails, error) 
 
 }
 
-func (d *DeviceDriver) GetLatestConfig() (map[string]interface{}, error) {
+func (d *DeviceDriver) GetInitialConfig() (map[string]interface{}, error) {
 	var err error
 	var p string
 	var req *gnmi.GetRequest

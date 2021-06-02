@@ -160,13 +160,13 @@ func main() {
 		if err := d.DiscoverDeviceDetails(); err != nil {
 			// update status with nil information
 			d.DeviceDetails = &nddv1.DeviceDetails{
-				HostName: &deviceName,
-				Kind: new(string),
-				SwVersion: new(string),
-				MacAddress: new(string),
+				HostName:     &deviceName,
+				Kind:         new(string),
+				SwVersion:    new(string),
+				MacAddress:   new(string),
 				SerialNumber: new(string),
 			}
-			if err := d.NetworkDeviceUpdate(d.DeviceDetails, nddv1.DiscoveryStatusNotReady); err != nil {
+			if err := d.NetworkNodeUpdate(d.DeviceDetails, nddv1.DiscoveryStatusNotReady); err != nil {
 				log.WithError(err).Error("Could not update Network Device State")
 			}
 			log.WithError(err).Error("Network Node discovery failed")
@@ -206,10 +206,17 @@ func main() {
 
 	if sp, ok := cm.Data["subscriptions"]; ok {
 		sps := strings.Split(sp, " ")
-		log.Infof("ConfigMap subscriptions data: %v", sps)
+		//log.Infof("ConfigMap subscriptions data: %v", sps)
 		d.InitSubscriptions(&sps)
 	}
 	log.Infof("ConfigMap subscriptions data: %v", *d.Subscriptions)
+
+	d.UpdateLatestConfigWithGnmi()
+
+	//err = d.ValidateLatestConfig()
+	//if err != nil {
+	//	log.WithError(err).Error("latest config validation error")
+	//}
 
 	d.InitDeviceDriverControllers()
 }

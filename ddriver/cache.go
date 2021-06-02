@@ -130,7 +130,7 @@ func (c *Cache) CheckMissingDependency(dependencies []string) bool {
 func (c *Cache) showCacheStatus() {
 	for _, l := range c.Levels {
 		for o, data := range c.Data[l] {
-			log.Infof("CACHE DATA: Object %s, Level: %d, Action: %s, CacheStatus %s, Dependencies: %v, IndividualPath: %v", o, l, data.Config.Action, data.CacheStatus, data.Config.Dependencies, data.Config.IndividualActionPath)
+			log.Infof("CACHE DATA: Object %s, Level: %d, Action: %s, CacheStatus %s, Dependencies: %v, LeafRefDependencies: %v, IndividualPath: %v", o, l, data.Config.Action, data.CacheStatus, data.Config.Dependencies, data.Config.LeafRefDependencies, data.Config.IndividualActionPath)
 		}
 	}
 }
@@ -149,6 +149,19 @@ func (c *Cache) CheckCache(dep string) (int, string, bool) {
 	return 0, "", false
 }
 
+// UpdateLeafRefDependency validates and updates the leafref dependency status
+func (c *Cache) UpdateLeafRefDependency(leafRefDep string) {
+	for _, l := range c.Levels {
+		for o, data := range c.Data[l] {
+			for _, dp := range data.Config.IndividualActionPath {
+				if dp == leafRefDep {
+					c.SetStatus(l, o, netwdevpb.CacheStatusReply_LeafRefDependency)
+				}
+			}
+		}
+	}
+}
+
 // ReconcileCache reconciles the cache
 func (d *DeviceDriver) ReconcileCache() error {
 	log.Infof("reconcile cache...")
@@ -157,6 +170,9 @@ func (d *DeviceDriver) ReconcileCache() error {
 	log.Infof("SubDelta Cache ReApplyCacheData: %t", *d.Cache.ReApplyCacheData)
 	log.Infof("SubDelta Cache DataSubDeltaDelete: %v", *d.Cache.DataSubDeltaDelete)
 	log.Infof("SubDelta Cache DataSubDeltaUpdate: %v", *d.Cache.DataSubDeltaUpdate)
+
+	// show initial config
+	//log.Infof("Initial Config: %v", d.InitialConfig)
 
 	for _, ip := range *d.Cache.DataSubDeltaDelete {
 		// process to delete the object via gnmi
@@ -189,6 +205,10 @@ func (d *DeviceDriver) ReconcileCache() error {
 	// walk over the cache sorted with level and paths per level
 	for _, l := range d.Cache.Levels {
 		for o, data := range d.Cache.Data[l] {
+			// check/update leafref dependencies
+			//for _, leafRefDep := range data.Config.LeafRefDependencies {
+			//	d.Cache.UpdateLeafRefDependency(leafRefDep)
+			//}
 			if len(data.Config.Dependencies) == 0 {
 				// no object dependencies
 				if data.Config.Action == netwdevpb.CacheUpdateRequest_Delete {
@@ -257,12 +277,75 @@ func (d *DeviceDriver) ReconcileCache() error {
 		}
 	}
 
-	log.Debugf("Show STATUS before DELETE GNMI")
+	// update the local cache before the delete to ensure the dynamic subscription notification take into
+	// account the latest cache that is aligned with the delete actions
+	log.Debugf("Show STATUS before DELETE PRE-PROCESSING")
+	var mergedData interface{}
+	var mergedPath string
+	//mergedData = d.InitialConfig
+	mergedPath = "/"
+	var mergedConfigIsEqual bool
+	var err error
+
+	// walk over the cache sorted with level and objects per level
+	for _, l := range d.Cache.Levels {
+		for _, data := range d.Cache.Data[l] {
+			// only process Updates that are in the cache, no Deletes, etc
+			if data.Config.Action == netwdevpb.CacheUpdateRequest_Update {
+				if d.Cache.CheckMissingDependency(data.Config.Dependencies) {
+					// parent object dependencies are missing
+					//// d.Cache.SetStatus(l, o, netwdevpb.CacheStatusReply_DependencyMissing)
+				} else {
+					// merge the data based on the UpdateActionPath
+					log.Debugf("New Update Path: aggregate path %s, individual path %s, current Update Path: %s", data.Config.AggregateActionPath, data.Config.IndividualActionPath, mergedPath)
+					// merge or insert the data object per object rather than through a full list
+					// We merge per individual path the data
+					for i, d := range data.Config.ConfigData {
+						log.Debugf("Start MERGE; individual path: %s, aggregate path: %s, mergedPath: %s", data.Config.IndividualActionPath[i], data.Config.AggregateActionPath, mergedPath)
+						var d1 interface{}
+						json.Unmarshal(d, &d1)
+						log.Debugf("Start MERGE; new data: %v", d1)
+						log.Debugf("Start MERGE; current merged data: %v", mergedData)
+						mergedPath, mergedData, err = startMerge(mergedPath, mergedData, data.Config.IndividualActionPath[i], data.Config.AggregateActionPath, d)
+						if err != nil {
+							log.WithError(err).Error("merge error")
+						}
+					}
+					//// d.Cache.SetStatus(l, o, netwdevpb.CacheStatusReply_UpdateBeingProcessed)
+				}
+			}
+		}
+	}
+
+	newMergedConfig, err := json.Marshal(mergedData)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if jsonpatch.Equal(d.Cache.CurrentConfig, newMergedConfig) {
+		mergedConfigIsEqual = true
+	} else {
+		mergedConfigIsEqual = false
+		d.Cache.CurrentConfig = newMergedConfig
+	}
+
+	// show initial config
+	log.Infof("Initial Config: %v", d.InitialConfig)
+	// show initial config
+	log.Infof("Merge is Equal: %t", mergedConfigIsEqual)
+	log.Infof("Merged Config: %v", mergedData)
+
+	log.Infof("Show STATUS before DELETE GNMI")
+	d.Cache.showCacheStatus()
 	if *d.Debug {
 		d.Cache.showCacheStatus()
 	}
 
-	log.Debugf("deletePaths: %v", deletePaths)
+	for k1, v1 := range deletePaths {
+		for k2, v2 := range v1 {
+			log.Infof("deletePaths Level %d, path: %s: %v", k1, k2, *v2)
+		}
+	}
+	log.Infof("deletePaths: %v", deletePaths)
 
 	// the delete should happen per level starting from the top since the delete hierarchy is respected
 	// if interface and subinterfaace get delete, only delete interface via gnmi as the dependnt object
@@ -288,7 +371,7 @@ func (d *DeviceDriver) ReconcileCache() error {
 				switch data.CacheStatus {
 				case netwdevpb.CacheStatusReply_DependencyMissing:
 					log.Error("This state should never be processed here, since the dependency is missing")
-				case netwdevpb.CacheStatusReply_DeletePending:
+				case netwdevpb.CacheStatusReply_DeletePending, netwdevpb.CacheStatusReply_UpdateBeingProcessed:
 					// process the gnmi to delete the object
 					if err := d.deleteDeviceDataGnmi(&ip); err != nil {
 						log.WithError(err).Errorf("GNMI delete process failed, object: %s, path: %s", o, ip)
@@ -301,7 +384,7 @@ func (d *DeviceDriver) ReconcileCache() error {
 					} else {
 						// only update the individual status since we assume the aggregate object is success
 						data.Config.IndividualActionPathSuccess[i] = true
-						log.Debugf("GNMI delete processed successfully, object: %s, path: %s", o, ip)
+						log.Infof("GNMI delete processed successfully, object: %s, path: %s", o, ip)
 					}
 				case netwdevpb.CacheStatusReply_DeletePendingWithParentDependency:
 					// check if the parent got deleted successfully and only than delete the object and cry success
@@ -349,14 +432,17 @@ func (d *DeviceDriver) ReconcileCache() error {
 
 	// PREPROCESS UPDATE ACTIONS
 
-	log.Debugf("Show STATUS BEFORE UPDATE PROCESSING AND AFTER DELETE PROCESSING")
+	log.Infof("Show STATUS BEFORE UPDATE PROCESSING AND AFTER DELETE PROCESSING")
+	d.Cache.showCacheStatus()
 	if *d.Debug {
 		d.Cache.showCacheStatus()
 	}
 
-	var mergedData interface{}
-	var mergedPath string
-	var err error
+	//var mergedData interface{}
+	//var mergedPath string
+	//mergedData = d.InitialConfig
+	mergedPath = "/"
+	//var err error
 
 	// walk over the cache sorted with level and objects per level
 	for _, l := range d.Cache.Levels {
@@ -375,8 +461,8 @@ func (d *DeviceDriver) ReconcileCache() error {
 						log.Debugf("Start MERGE; individual path: %s, aggregate path: %s, mergedPath: %s", data.Config.IndividualActionPath[i], data.Config.AggregateActionPath, mergedPath)
 						var d1 interface{}
 						json.Unmarshal(d, &d1)
-						log.Infof("Start MERGE; new data: %v", d1)
-						log.Infof("Start MERGE; current merged data: %v", mergedData)
+						log.Debugf("Start MERGE; new data: %v", d1)
+						log.Debugf("Start MERGE; current merged data: %v", mergedData)
 						mergedPath, mergedData, err = startMerge(mergedPath, mergedData, data.Config.IndividualActionPath[i], data.Config.AggregateActionPath, d)
 						if err != nil {
 							log.WithError(err).Error("merge error")
@@ -389,19 +475,26 @@ func (d *DeviceDriver) ReconcileCache() error {
 	}
 
 	// PROCESS UPDATE AND SHOW CACHE BEFORE UPDATE
-	log.Debugf("Show STATUS before UPDATE")
+	log.Infof("Show STATUS before UPDATE")
+	d.Cache.showCacheStatus()
 	if *d.Debug {
 		d.Cache.showCacheStatus()
 	}
 
-	newMergedConfig, err := json.Marshal(mergedData)
+	newMergedConfig, err = json.Marshal(mergedData)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	if jsonpatch.Equal(d.Cache.CurrentConfig, newMergedConfig) {
-		if *d.Cache.ReApplyCacheData {
+		if *d.Cache.ReApplyCacheData || !mergedConfigIsEqual {
 			log.Info("The new merged data is EQUAL to the current config, but an object got deleted -> REAPPLY CACHE")
+
+			// update the configmap
+			if err := d.ConfigMapUpdate(StringPtr(string(d.Cache.CurrentConfig))); err != nil {
+				log.WithError(err).Error("Update configmap failed")
+			}
+
 			if len(mergedPath) > 0 {
 				updateSuccess := true
 				if err := d.updateDeviceDataGnmi(&mergedPath, newMergedConfig); err != nil {
@@ -417,12 +510,16 @@ func (d *DeviceDriver) ReconcileCache() error {
 			log.Info("The new merged data is EQUAL to the current config. DO NOTHING")
 			d.UpdateCacheAfterUpdate(true)
 		}
-
 	} else {
 		log.Info("The new merged data is DIFFERENT, apply to the device")
 		log.Infof("MergedUpdatePath: %s \n", mergedPath)
 		log.Infof("MergedData: %s \n", newMergedConfig)
 		d.Cache.CurrentConfig = newMergedConfig
+
+		// update the configmap
+		if err := d.ConfigMapUpdate(StringPtr(string(d.Cache.CurrentConfig))); err != nil {
+			log.WithError(err).Error("Update configmap failed")
+		}
 
 		// Only Update the device when the data is present
 		if len(mergedPath) > 0 {
@@ -431,10 +528,11 @@ func (d *DeviceDriver) ReconcileCache() error {
 				// TODO check failure status
 				log.WithError(err).Errorf("Merged update process FAILED, path: %s", mergedPath)
 				updateSuccess = false
+			} else {
+				log.Infof("Merged update process SUCCEEDED, path: %s", mergedPath)
+				// update Cache based on the result of the update
+				d.UpdateCacheAfterUpdate(updateSuccess)
 			}
-			log.Infof("Merged update process SUCCEEDED, path: %s", mergedPath)
-			// update Cache based on the result of the update
-			d.UpdateCacheAfterUpdate(updateSuccess)
 		}
 	}
 	*d.Cache.ReApplyCacheData = false

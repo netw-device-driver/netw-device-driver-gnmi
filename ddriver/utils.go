@@ -124,16 +124,16 @@ func startMerge(ap1 string, j1 interface{}, ip2, ap2 string, data2 []byte) (stri
 		// otherwise we have missing depenedencies
 		var m interface{}
 
-		log.Infof("mergePath: %s", newAggrPath)
-		log.Infof("merge individual path: %s", newIndivPath)
-		log.Infof("merge data x1: %v", x1)
-		log.Infof("merge data x2: %v", x2)
+		log.Debugf("mergePath: %s", newAggrPath)
+		log.Debugf("merge individual path: %s", newIndivPath)
+		log.Debugf("merge data x1: %v", x1)
+		log.Debugf("merge data x2: %v", x2)
 		// NEW CODE
 		ekvl := getHierarchicalElements(newIndivPath)
 		m, err = addObjectToTheTree(x1, x2, ekvl, 0)
 
-		log.Infof("mergePath: %s", newAggrPath)
-		log.Infof("mergedData: %v", m)
+		log.Debugf("mergePath: %s", newAggrPath)
+		log.Debugf("mergedData: %v", m)
 
 		return newAggrPath, m, err
 	}
@@ -201,9 +201,9 @@ func addObjectToTheTree(x1, x2 interface{}, ekvl []ElementKeyValue, i int) (inte
 }
 
 func addObject(x1, x2 interface{}, ekv []ElementKeyValue, i int) interface{} {
-	log.Infof("ADD1 OBJECT EKV: %d %v", i, ekv)
-	log.Infof("ADD1 OBJECT X1: %v", x1)
-	log.Infof("ADD1 OBJECT X2: %v", x2)
+	log.Debugf("ADD1 OBJECT EKV: %d %v", i, ekv)
+	log.Debugf("ADD1 OBJECT X1: %v", x1)
+	log.Debugf("ADD1 OBJECT X2: %v", x2)
 	switch x1 := x1.(type) {
 	case map[string]interface{}:
 		x2, ok := x2.(map[string]interface{})
@@ -213,22 +213,28 @@ func addObject(x1, x2 interface{}, ekv []ElementKeyValue, i int) interface{} {
 		}
 		if _, ok := x1[ekv[i].Element]; ok {
 			// object exists, so we need to continue -> this is typically for lists
-			log.Infof("map[string]interface{} Check NEXT ELEMENT")
+			log.Debugf("map[string]interface{} Check NEXT ELEMENT")
 			if i == len(ekv)-1 {
-				// last element of the list
-				log.Infof("map[string]interface{} Last Element of List")
-				x1[ekv[i].Element] = addObject(x1[ekv[i].Element], x2[ekv[i].Element], ekv, i)
+				if ekv[i].KeyName != "" {
+					// not last element of the list e.g. we are at interface of interface[name=ethernet-1/1]
+					log.Debugf("map[string]interface{} Last Element of List")
+					x1[ekv[i].Element] = addObject(x1[ekv[i].Element], x2[ekv[i].Element], ekv, i)
+				} else {
+					// system/ntp
+					log.Debugf("map[string]interface{} Last Element of Tree")
+					x1[ekv[i].Element] = x2[ekv[i].Element]
+				}
 			} else {
 				if ekv[i].KeyName != "" {
 					// not last element of the list e.g. we are at interface of interface[name=ethernet-1/1]/subinterface[index=100]
-					log.Infof("map[string]interface{} Not Last Element of List")
+					log.Debugf("map[string]interface{} Not Last Element of List")
 					x1[ekv[i].Element] = addObject(x1[ekv[i].Element], x2, ekv, i)
 				} else {
 					// not last element of interface[name=ethernet-1/1]/protocol/bgp-vpn; we are at protocol level
-					log.Infof("map[string]interface{} Not Last Element of Tree")
+					log.Debugf("map[string]interface{} Not Last Element of Tree")
 					x1[ekv[i].Element] = addObject(x1[ekv[i].Element], x2, ekv, i+1)
-					log.Infof("map[string]interface{} after add object: %v", x1)
-					log.Infof("map[string]interface{} after add object: %v", x2)
+					log.Debugf("map[string]interface{} after add object: %v", x1)
+					log.Debugf("map[string]interface{} after add object: %v", x2)
 				}
 
 			}
@@ -236,10 +242,10 @@ func addObject(x1, x2 interface{}, ekv []ElementKeyValue, i int) interface{} {
 			return x1
 		}
 		// it is a new element so we return. E.g. network-instance get added to / or interfaces gets added to network-instance
-		log.Infof("map[string]interface{} add new Element")
+		log.Debugf("map[string]interface{} add new Element")
 		if ekv[i].KeyName != "" {
 			// list -> interfaces or network-instances
-			log.Infof("map[string]interface{} ekv[i].KeyName != '' list")
+			log.Debugf("map[string]interface{} ekv[i].KeyName != '' list")
 			x1[ekv[i].Element] = x2[ekv[i].Element]
 		} else {
 			// add e.g. system of (system, ntp)
@@ -254,16 +260,16 @@ func addObject(x1, x2 interface{}, ekv []ElementKeyValue, i int) interface{} {
 			*/
 		}
 		if i == len(ekv)-1 {
-			log.Infof("map[string]interface{} i == len(ekv)-1")
+			log.Debugf("map[string]interface{} i == len(ekv)-1")
 			x1[ekv[i].Element] = x2[ekv[i].Element]
-			log.Infof("map[string]interface{} after add object: %v", x1)
-			log.Infof("map[string]interface{} after add object: %v", x2)
+			log.Debugf("map[string]interface{} after add object: %v", x1)
+			log.Debugf("map[string]interface{} after add object: %v", x2)
 			return x1
 		} else {
-			log.Infof("map[string]interface{} i <> len(ekv)-1 continue")
+			log.Debugf("map[string]interface{} i <> len(ekv)-1 continue")
 			x1[ekv[i].Element] = addObject(x1[ekv[i].Element], x2, ekv, i+1)
-			log.Infof("map[string]interface{} after add object: %v", x1)
-			log.Infof("map[string]interface{} after add object: %v", x2)
+			log.Debugf("map[string]interface{} after add object: %v", x1)
+			log.Debugf("map[string]interface{} after add object: %v", x2)
 		}
 
 	case []interface{}:
@@ -277,12 +283,17 @@ func addObject(x1, x2 interface{}, ekv []ElementKeyValue, i int) interface{} {
 							if v3 == ekv[i].KeyValue {
 								if i == len(ekv)-1 {
 									// last element in the ekv list
-									log.Infof("[]interface{} -> object found in list, override with new object")
-									x1[n] = x2
+									log.Debugf("[]interface{} -> object found in list, override with new object")
+									x2, ok := x2.([]interface{})
+									if !ok {
+										log.Debugf("[]interface{} -> nok something went wrong")
+										return x1
+									}
+									x1[n] = x2[0]
 									return x1
 								} else {
 									// not last element in the ekv list
-									log.Infof("[]interface{} -> object found in list continue")
+									log.Debugf("[]interface{} -> object found in list continue")
 									x1[n] = addObject(x1[n], x2, ekv, i+1)
 								}
 							}
@@ -294,38 +305,40 @@ func addObject(x1, x2 interface{}, ekv []ElementKeyValue, i int) interface{} {
 		if i == len(ekv)-1 {
 			x2, ok := x2.([]interface{})
 			if !ok {
-				log.Infof("[]interface{} -> nok something went wrong")
+				log.Debugf("[]interface{} -> nok something went wrong")
 				return x1
 			}
-			log.Infof("[]interface{} -> object not found in list append object")
+			log.Debugf("[]interface{} -> object not found in list append object")
 			x1 = append(x1, x2[0])
+			log.Debugf("[]interface{} -> object not found in list append object x1 %v", x1)
+			log.Debugf("[]interface{} -> object not found in list append object x2 %v", x2[0])
 			return x1
 		}
 	case nil:
-		log.Infof("nil -> object does not exist create")
+		log.Debugf("nil -> object does not exist create")
 		// we need to add all elements of the ekv in the tree if they dont exist
 		// e.g. system/network-instance/protocols/evpn
 		if i == len(ekv)-1 {
-			log.Infof("nil -> last object in the tree is added, now merge x2")
+			log.Debugf("nil -> last object in the tree is added, now merge x2")
 			x1, ok := x2.(map[string]interface{})
 			if ok {
-				log.Infof("nil end -> return x1 data: %v", x1)
+				log.Debugf("nil end -> return x1 data: %v", x1)
 				return x1
 			}
 		} else {
-			log.Infof("nil -> i <> len(ekv)-1 continue, more objects need to be added")
+			log.Debugf("nil -> i <> len(ekv)-1 continue, more objects need to be added")
 			var xnew interface{}
 			xnew = make(map[string]interface{})
 			x1, ok := xnew.(map[string]interface{})
 			if ok {
-				log.Infof("nil -> addObject")
+				log.Debugf("nil -> addObject")
 				x1[ekv[i].Element] = addObject(x1[ekv[i].Element], x2, ekv, i+1)
 			}
-			log.Infof("nil object added -> x1 data: %v", x1)
+			log.Debugf("nil object added -> x1 data: %v", x1)
 			return x1
 		}
 	}
-	log.Infof("return x1")
+	log.Debugf("return x1")
 	return x1
 }
 

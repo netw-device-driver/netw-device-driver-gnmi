@@ -105,7 +105,6 @@ func (d *DeviceDriver) validateDiff(resp *gnmi.SubscribeResponse) {
 
 		du := resp.GetUpdate().Delete
 		for i, del := range du {
-
 			log.Infof("SubscribeResponse Delete Path %d", i)
 			ekvl, xpath := gnmiPathToXPath(del.GetElem())
 
@@ -124,6 +123,7 @@ func (d *DeviceDriver) validateDiff(resp *gnmi.SubscribeResponse) {
 			log.Infof("SubscribeResponse Update Path %d", i)
 			ekvl, xpath := gnmiPathToXPath(upd.GetPath().GetElem())
 			value, err := gnmic.GetValue(upd.GetVal())
+			log.Infof("SubscribeResponse Update Path Nbr %d Ekvl %v Xpath %s", i, ekvl, xpath)
 			subDelta.SubAction = SubscriptionActionPtr(SubcriptionActionUpdate)
 			subDelta.Ekvl = &ekvl
 			subDelta.Xpath = &xpath
@@ -155,12 +155,12 @@ func (d *DeviceDriver) FindCacheObject(subDelta *SubscriptionDelta) (*Subscripti
 	if err != nil {
 		return nil, err
 	}
-	log.Infof("Cache Config: %v", x1)
+	log.Debugf("Cache Config: %v", x1)
 	log.Infof("EKVL : %v", *subDelta.Ekvl)
 	i, x1, f := findObject(x1, *subDelta.Ekvl, 0)
 	if f {
 		if *subDelta.SubAction == SubcriptionActionUpdate {
-			log.Debugf("OBJECT FINALLY FOUND: %v", x1)
+			log.Infof("OBJECT FINALLY FOUND: %v", x1)
 			log.Infof("Update: ok - %s", *subDelta.Xpath)
 			// delete all leaftlists of the data for comparison
 			// delete the key as well
@@ -199,12 +199,12 @@ func (d *DeviceDriver) FindCacheObject(subDelta *SubscriptionDelta) (*Subscripti
 				}
 				x2 = x
 			}
-			log.Infof("Update: Data from System : %v", x2)
+			log.Infof("Update: Data from Network Device : %v", x2)
 
 			if !cmp.Equal(x1, x2) {
 				// change = true
 				changelog, _ := diff.Diff(x2, x1)
-				log.Infof("Update: Data from system and cache is not equal, changelog : %v", changelog)
+				log.Infof("Update: Data from Network Device and cache is not equal, changelog : %v", changelog)
 				for _, change := range changelog {
 					if change.Type == diff.CREATE || change.Type == diff.UPDATE {
 						subDelta.ReApplyCacheData = BoolPtr(true)
@@ -214,7 +214,7 @@ func (d *DeviceDriver) FindCacheObject(subDelta *SubscriptionDelta) (*Subscripti
 					}
 				}
 			} else {
-				log.Infof("Update: Data from system and cache is equal, Do Nothing")
+				log.Infof("Update: Data from Network Device and cache is equal, Do Nothing")
 			}
 		} else {
 			// Delete subscription update
@@ -224,7 +224,6 @@ func (d *DeviceDriver) FindCacheObject(subDelta *SubscriptionDelta) (*Subscripti
 			log.Infof("Delete: to be recreated data  - %v", x1)
 			subDelta.ReApplyCacheData = BoolPtr(true)
 		}
-
 	} else {
 		if *subDelta.SubAction == SubcriptionActionUpdate {
 			log.Infof("OBJECT FINALLY NOT FOUND IN CACHE: INDEX %d EKV %v", i, *subDelta.Ekvl)
@@ -243,7 +242,6 @@ func (d *DeviceDriver) FindCacheObject(subDelta *SubscriptionDelta) (*Subscripti
 			// the data is not in the cache
 			log.Debugf("Delete: do nothing as the config was not supposed to be here %s", *subDelta.Xpath)
 		}
-
 	}
 	return subDelta, nil
 }

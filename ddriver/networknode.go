@@ -25,14 +25,14 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-func (d *DeviceDriver) NetworkDeviceUpdate(dDetails *nddv1.DeviceDetails, status nddv1.DiscoveryStatus) error {
+func (d *DeviceDriver) NetworkNodeUpdate(dDetails *nddv1.DeviceDetails, status nddv1.DiscoveryStatus) error {
 
-	ndKey := types.NamespacedName{
+	nnKey := types.NamespacedName{
 		Namespace: "default",
 		Name:      *d.DeviceName,
 	}
-	nd := &nddv1.NetworkDevice{}
-	if err := (*d.K8sClient).Get(d.Ctx, ndKey, nd); err != nil {
+	nn := &nddv1.NetworkNode{}
+	if err := (*d.K8sClient).Get(d.Ctx, nnKey, nn); err != nil {
 		log.WithError(err).Error("Failed to get NetworkNode")
 		return err
 	}
@@ -41,29 +41,27 @@ func (d *DeviceDriver) NetworkDeviceUpdate(dDetails *nddv1.DeviceDetails, status
 		Port: d.CacheServerPort,
 	}
 
-	nd.Status = nddv1.NetworkDeviceStatus{
-		DiscoveryStatus: &status,
-		DeviceDetails:   dDetails,
-		GrpcServer:      grpcServer,
-	}
+	log.Infof("DiscoveryStatus: %v", status)
+	nn.SetDiscoveryStatus(status)
+	nn.Status.DeviceDetails = dDetails
+	nn.Status.GrpcServer = grpcServer
 
-	if err := d.saveNetworkDeviceStatus(d.Ctx, nd); err != nil {
+	if err := d.saveNetworkNodeStatus(d.Ctx, nn); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (d *DeviceDriver) saveNetworkDeviceStatus(ctx context.Context, nd *nddv1.NetworkDevice) error {
+func (d *DeviceDriver) saveNetworkNodeStatus(ctx context.Context, nn *nddv1.NetworkNode) error {
 	t := metav1.Now()
-	nd.Status.DeepCopy()
-	nd.Status.LastUpdated = &t
+	nn.Status.DeepCopy()
+	nn.Status.LastUpdated = &t
 
-	log.Info("Network Node status",
-		"status", nd.Status)
+	log.Infof("Network Node status, discovery status %v", *nn.Status.DiscoveryStatus)
 
-	if err := (*d.K8sClient).Status().Update(ctx, nd); err != nil {
-		log.WithError(err).Error("Failed to update network device status ")
+	if err := (*d.K8sClient).Status().Update(ctx, nn); err != nil {
+		log.WithError(err).Error("Failed to update network node status ")
 		return err
 	}
 	return nil

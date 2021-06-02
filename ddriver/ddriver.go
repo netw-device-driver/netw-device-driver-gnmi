@@ -61,7 +61,7 @@ type DeviceDriver struct {
 	K8sClient          *client.Client
 	NetworkNodeKind    *string
 	DeviceDetails      *nddv1.DeviceDetails
-	LatestConfig       map[string]interface{}
+	InitialConfig      map[string]interface{}
 	Subscriptions      *[]string
 	ExceptionPaths     *[]string
 	Debug              *bool
@@ -201,7 +201,7 @@ func NewDeviceDriver(opts ...Option) *DeviceDriver {
 		DeviceName:         new(string),
 		DeviceDetails:      new(nddv1.DeviceDetails),
 		TargetConfig:       new(collector.TargetConfig),
-		LatestConfig:       make(map[string]interface{}),
+		InitialConfig:      make(map[string]interface{}),
 		K8sClient:          new(client.Client),
 		Cache: &Cache{
 			Data:               make(map[int]map[string]*ResourceData),
@@ -380,20 +380,231 @@ func (d *DeviceDriver) DiscoverDeviceDetails() error {
 		if err != nil {
 			return err
 		}
-		d.LatestConfig, err = d.GetLatestConfig()
+		d.InitialConfig, err = d.GetInitialConfig()
 		if err != nil {
 			return err
 		}
+		// trim the first map
+		for _, v := range d.InitialConfig {
+			switch v.(type) {
+			case map[string]interface{}:
+				d.InitialConfig = cleanConfig(v.(map[string]interface{}))
+			}
+		}
+		log.Infof("Latest config cleaned: %v", d.InitialConfig)
 	default:
 		// TODO add other devices
 	}
 
 	log.Infof("Device details: %v", d.DeviceDetails)
-	log.Infof("LatestConfig: %v", d.LatestConfig)
+	log.Infof("LatestConfig: %v", d.InitialConfig)
 
-	if err := d.NetworkDeviceUpdate(d.DeviceDetails, nddv1.DiscoveryStatusReady); err != nil {
+	jsonConfigStr, err := json.Marshal(d.InitialConfig)
+	if err != nil {
+		return err
+	}
+	if err := d.ConfigMapUpdate(StringPtr(string(jsonConfigStr))); err != nil {
+		return err
+	}
+
+	if err := d.NetworkNodeUpdate(d.DeviceDetails, nddv1.DiscoveryStatusReady); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+func cleanConfig(x1 map[string]interface{}) map[string]interface{} {
+	x2 := make(map[string]interface{})
+	for k1, v1 := range x1 {
+		log.Infof("cleanConfig Key: %s", k1)
+		log.Infof("cleanConfig Value: %v", v1)
+		switch x3 := v1.(type) {
+		case []interface{}:
+			x := make([]interface{}, 0)
+			for _, v3 := range x3 {
+				switch x3 := v3.(type) {
+				case map[string]interface{}:
+					x4 := cleanConfig(x3)
+					x = append(x, x4)
+				default:
+					x = append(x, v3)
+				}
+			}
+			x2[strings.Split(k1, ":")[len(strings.Split(k1, ":"))-1]] = x
+		case map[string]interface{}:
+			x4 := cleanConfig(x3)
+			x2[strings.Split(k1, ":")[len(strings.Split(k1, ":"))-1]] = x4
+		default:
+			x2[strings.Split(k1, ":")[len(strings.Split(k1, ":"))-1]] = v1
+		}
+	}
+	return x2
+}
+
+func addElement2ExpceptionTree(et map[string]interface{}, idx int, split []string) map[string]interface{} {
+	// entry does not exist
+	log.Infof("addElement2ExpceptionTree Idx: %d, Split: %v Exception Tree: %v", idx, split, et)
+	if _, ok := et[split[idx]]; !ok {
+		// if there is no more elements in the exception path dont add more
+		// if not initialize for the additional elements in the exception path
+		if idx < len(split)-1 {
+			e := make(map[string]interface{})
+			idx++
+			et[split[idx-1]] = addElement2ExpceptionTree(e, idx, split)
+			return et
+		} else {
+			et[split[idx]] = nil
+			return et
+		}
+	} else {
+		if idx < len(split)-1 {
+			idx++
+			e := et[split[idx-1]]
+			switch e.(type) {
+			case map[string]interface{}:
+				et[split[idx-1]] = addElement2ExpceptionTree(e.(map[string]interface{}), idx, split)
+			default:
+				log.Errorf("addElement2ExpceptionTree: We should never come here")
+			}
+			return et
+		} else {
+			et[split[idx]] = nil
+			return et
+		}
+	}
+}
+
+// ValidateInitalConfig validates the retrieved config and checks if the
+/*
+func (d *DeviceDriver) ValidateInitalConfig() (err error) {
+	// creates an exception tree
+	et := make(map[string]interface{})
+	for _, ep := range *d.ExceptionPaths {
+		split := strings.Split(ep, "/")
+		et = addElement2ExpceptionTree(et, 0, split)
+	}
+
+	log.Infof("Exception Tree: %v", et)
+
+	lc := make(map[string]interface{})
+	for _, v := range d.InitialConfig {
+		switch v.(type) {
+		case map[string]interface{}:
+			lc = v.(map[string]interface{})
+		}
+	}
+
+	f := compareLatestConfigTree(lc, et)
+	log.Infof("compareLatestConfigTree with exception tree %v", f)
+
+	d.DeletedUnwantedConfiguration(f, "/")
+
+	d.InitialConfig, err = d.GetInitialConfig()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+*/
+
+func compareLatestConfigTree(lc, et map[string]interface{}) map[string]interface{} {
+	log.Infof("Latest    Config: %v", lc)
+	log.Infof("Exception Tree  : %v", et)
+	found := make(map[string]interface{})
+	for k1, x1 := range lc {
+		k1 := strings.Split(k1, ":")[len(strings.Split(k1, ":"))-1]
+		found[k1] = false
+		for k2, v2 := range et {
+			// getHierarchicalElements assumes the string starts with a /
+			ekvl := getHierarchicalElements("/" + k2)
+			log.Infof("ekvl: %v", ekvl)
+			if k1 == ekvl[0].Element {
+				if ekvl[0].KeyName != "" {
+					// when a keyname exists, we should delete the found entry w/o the key, since this name will not be used
+					delete(found, k1)
+					switch x3 := x1.(type) {
+					case []interface{}:
+						for _, v1 := range x3 {
+							switch x3 := v1.(type) {
+							case map[string]interface{}:
+								for k3, v3 := range x3 {
+									log.Infof("k3: %v, ekvl[0].KeyName: %v", k3, ekvl[0].KeyName)
+									if k3 == ekvl[0].KeyName {
+										switch v3.(type) {
+										case string, uint32:
+											if v3 == ekvl[0].KeyValue {
+												switch x2 := v2.(type) {
+												case nil:
+													// we are at the end of the exception tree
+													found[fmt.Sprintf("%s[%s=%s]", ekvl[0].Element, ekvl[0].KeyName, v3)] = true
+												case map[string]interface{}:
+													// we are not yet at the end of the exception tree
+													found[fmt.Sprintf("%s[%s=%s]", ekvl[0].Element, ekvl[0].KeyName, v3)] = compareLatestConfigTree(x1.(map[string]interface{}), x2)
+												}
+											} else {
+												found[fmt.Sprintf("%s[%s=%s]", ekvl[0].Element, ekvl[0].KeyName, v3)] = false
+											}
+										}
+									}
+									// ignore other elements since they are not keys
+								}
+							}
+						}
+					}
+				} else {
+					// element without a key, like /system
+					switch x2 := v2.(type) {
+					case nil:
+						// we are at the end of the exception tree
+						found[k1] = true
+					case map[string]interface{}:
+						// we are not yet at the end of the exception tree
+						found[k1] = compareLatestConfigTree(x1.(map[string]interface{}), x2)
+					}
+				}
+			}
+		}
+	}
+	//log.Infof("compareLatestConfigTree: %v", found)
+	return found
+}
+
+func (d *DeviceDriver) DeletedUnwantedConfiguration(f map[string]interface{}, prefix string) {
+	for k, v := range f {
+		switch b := v.(type) {
+		case bool:
+			// if b is false
+			if !b {
+				log.Infof("Delete Path: %s", prefix+k)
+				ip := prefix + k
+				if err := d.deleteDeviceDataGnmi(&ip); err != nil {
+					// individual path delete process failure
+					log.WithError(err).Errorf("GNMI delete process failed for subscription delta, path: %s", ip)
+				} else {
+					// individual path delete process success
+					log.Infof("GNMI delete processed successfully for subscription delta, path: %s", ip)
+				}
+
+			}
+		case map[string]interface{}:
+			d.DeletedUnwantedConfiguration(v.(map[string]interface{}), prefix+k+"/")
+		}
+	}
+}
+
+func (d *DeviceDriver) UpdateLatestConfigWithGnmi() {
+	mergedPath := "/"
+	newMergedConfig, err := json.Marshal(d.InitialConfig)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := d.updateDeviceDataGnmi(&mergedPath, newMergedConfig); err != nil {
+		// TODO check failure status
+		log.WithError(err).Errorf("Merged update process FAILED, path: %s", mergedPath)
+	} else {
+		log.Infof("Merged update process SUCCEEDED, path: %s", mergedPath)
+	}
+
 }
