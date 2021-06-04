@@ -123,15 +123,14 @@ func (d *DeviceDriver) validateDiff(resp *gnmi.SubscribeResponse) {
 			log.Infof("SubscribeResponse Update Path %d", i)
 			ekvl, xpath := gnmiPathToXPath(upd.GetPath().GetElem())
 			value, err := gnmic.GetValue(upd.GetVal())
+			if err != nil {
+				log.WithError(err).Error("validateDiff get Value error")
+			}
 			log.Infof("SubscribeResponse Update Path Nbr %d Ekvl %v Xpath %s", i, ekvl, xpath)
 			subDelta.SubAction = SubscriptionActionPtr(SubcriptionActionUpdate)
 			subDelta.Ekvl = &ekvl
 			subDelta.Xpath = &xpath
 			subDelta.Value = &value
-
-			if err != nil {
-				log.WithError(err).Error("validateDiff get Value error")
-			}
 
 			subDelta, err = d.FindCacheObject(subDelta)
 			if err != nil {

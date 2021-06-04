@@ -35,6 +35,7 @@ type Cache struct {
 	netwdevpb.UnimplementedCacheUpdateServer
 
 	Mutex              sync.RWMutex
+	NewUpdates         *bool
 	Data               map[int]map[string]*ResourceData
 	Levels             []int
 	DataSubDeltaDelete *[]string
@@ -54,14 +55,17 @@ func (c *Cache) UpdateSubscriptionDelta(subDelta *SubscriptionDelta) {
 
 	// only update the reapply cache when it is set
 	if *subDelta.ReApplyCacheData {
+		*c.NewUpdates = true
 		c.ReApplyCacheData = subDelta.ReApplyCacheData
 	}
 
 	if len(*subDelta.DataSubDeltaDelete) > 0 {
+		*c.NewUpdates = true
 		*c.DataSubDeltaDelete = append(*c.DataSubDeltaDelete, *subDelta.DataSubDeltaDelete...)
 	}
 
 	if len(*subDelta.DataSubDeltaUpdate) > 0 {
+		*c.NewUpdates = true
 		*c.DataSubDeltaUpdate = append(*c.DataSubDeltaUpdate, *subDelta.DataSubDeltaUpdate...)
 	}
 
@@ -495,7 +499,11 @@ func (d *DeviceDriver) ReconcileCache() error {
 				log.WithError(err).Error("Update configmap failed")
 			}
 
-			if len(mergedPath) > 0 {
+			//if len(mergedPath) > 0 {
+			log.Infof("MergedUpdatePath: %s", mergedPath)
+			log.Infof("MergedData: %s", newMergedConfig)
+			log.Infof("MergedData length: %d", len(newMergedConfig))
+			if string(newMergedConfig) != "null" && len(newMergedConfig) > 0 {
 				updateSuccess := true
 				if err := d.updateDeviceDataGnmi(&mergedPath, newMergedConfig); err != nil {
 					// TODO check failure status
@@ -512,8 +520,9 @@ func (d *DeviceDriver) ReconcileCache() error {
 		}
 	} else {
 		log.Info("The new merged data is DIFFERENT, apply to the device")
-		log.Infof("MergedUpdatePath: %s \n", mergedPath)
-		log.Infof("MergedData: %s \n", newMergedConfig)
+		log.Infof("MergedUpdatePath: %s ", mergedPath)
+		log.Infof("MergedData: %s ", newMergedConfig)
+		log.Infof("MergedData length: %d", len(newMergedConfig))
 		d.Cache.CurrentConfig = newMergedConfig
 
 		// update the configmap
@@ -522,7 +531,9 @@ func (d *DeviceDriver) ReconcileCache() error {
 		}
 
 		// Only Update the device when the data is present
-		if len(mergedPath) > 0 {
+		//if len(mergedPath) > 0 {
+		log.Infof("New Merged Config %v", newMergedConfig)
+		if string(newMergedConfig) != "null" && len(newMergedConfig) > 0 {
 			updateSuccess := true
 			if err := d.updateDeviceDataGnmi(&mergedPath, newMergedConfig); err != nil {
 				// TODO check failure status
@@ -535,9 +546,12 @@ func (d *DeviceDriver) ReconcileCache() error {
 			}
 		}
 	}
+	d.Cache.Mutex.Lock()
 	*d.Cache.ReApplyCacheData = false
 	*d.Cache.DataSubDeltaDelete = make([]string, 0)
 	*d.Cache.DataSubDeltaUpdate = make([]string, 0)
+	*d.Cache.NewUpdates = false
+	d.Cache.Mutex.Unlock()
 	log.Info("Show CACHE STATUS after UPDATE")
 	d.Cache.showCacheStatus()
 

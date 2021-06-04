@@ -35,7 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-const timer = 10
+const timer = 1
 
 // DeviceeDetails struct
 /*
@@ -204,6 +204,7 @@ func NewDeviceDriver(opts ...Option) *DeviceDriver {
 		InitialConfig:      make(map[string]interface{}),
 		K8sClient:          new(client.Client),
 		Cache: &Cache{
+			NewUpdates:         new(bool),
 			Data:               make(map[int]map[string]*ResourceData),
 			Levels:             make([]int, 0),
 			DataSubDeltaDelete: &dataSubDeltaDelete,
@@ -310,6 +311,8 @@ func (d *DeviceDriver) StartReconcileProcess() {
 	timeout := make(chan bool, 1)
 	timeout <- true
 	log.Info("Timer reconciliation process is running...")
+	// run the reconcile process on startup
+	*d.Cache.NewUpdates = true
 	for {
 		select {
 		case <-timeout:
@@ -317,7 +320,15 @@ func (d *DeviceDriver) StartReconcileProcess() {
 			timeout <- true
 
 			log.Info("reconcile cache...")
-			d.ReconcileCache()
+			if *d.Cache.NewUpdates {
+				d.ReconcileCache()
+			} else {
+				fmt.Printf(".")
+			}
+			target := "srl-k8s-operator-controller-manager-deviation-service" + "." + "srl-k8s-operator-system" + "." + "svc.cluster.local" + ":" + "9998"
+			if _, err := deviationUpdate(d.Ctx, stringPtr(target), stringPtr("testingResource")); err != nil {
+				log.WithError(err).Error("failed to update deviation server")
+			}
 
 		case <-d.StopCh:
 			log.Info("Stopping timer reconciliation process")

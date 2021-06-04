@@ -57,6 +57,7 @@ func (c *Cache) Update(ctx context.Context, req *netwdevpb.CacheUpdateRequest) (
 		Config:      req,
 		CacheStatus: netwdevpb.CacheStatusReply_ToBeProcessed,
 	}
+	*c.NewUpdates = true
 	c.Mutex.Unlock()
 	reply := &netwdevpb.CacheUpdateReply{}
 	return reply, nil
