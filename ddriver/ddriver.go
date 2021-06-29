@@ -52,19 +52,21 @@ type DeviceDetails struct {
 // DeviceDriver contains the device driver information
 type DeviceDriver struct {
 	//NatsServer         *string
-	CacheServerPort    *int
-	CacheServerAddress *string
-	DeviceName         *string
-	TargetConfig       *collector.TargetConfig
-	Target             *collector.Target
-	TargetCollector    *Collector
-	K8sClient          *client.Client
-	NetworkNodeKind    *string
-	DeviceDetails      *nddv1.DeviceDetails
-	InitialConfig      map[string]interface{}
-	Subscriptions      *[]string
-	ExceptionPaths     *[]string
-	Debug              *bool
+	CacheServerPort        *int
+	CacheServerAddress     *string
+	DeviceName             *string
+	TargetConfig           *collector.TargetConfig
+	Target                 *collector.Target
+	TargetCollector        *Collector
+	K8sClient              *client.Client
+	NetworkNodeKind        *string
+	DeviceDetails          *nddv1.DeviceDetails
+	InitialConfig          map[string]interface{}
+	Subscriptions          *[]string
+	ExceptionPaths         *[]string
+	ExplicitExceptionPaths *[]string
+	AutoPilot              *bool
+	Debug                  *bool
 
 	Cache  *Cache
 	StopCh chan struct{}
@@ -183,6 +185,12 @@ func WithEncoding(e *string) Option {
 }
 */
 
+func WithAutoPilot(b *bool) Option {
+	return func(d *DeviceDriver) {
+		d.AutoPilot = b
+	}
+}
+
 func WithDebug(b *bool) Option {
 	return func(d *DeviceDriver) {
 		d.Debug = b
@@ -192,8 +200,9 @@ func WithDebug(b *bool) Option {
 // NewDeviceDriver function defines a new device driver
 func NewDeviceDriver(opts ...Option) *DeviceDriver {
 	log.Info("initialize new device driver ...")
-	dataSubDeltaDelete := make([]string, 0)
-	dataSubDeltaUpdate := make([]string, 0)
+	onChangeDeletes := make([]string, 0)
+	onChangeUpdates := make([]string, 0)
+	OnChangeDeviations := make(map[string]*Deviation)
 	var x1 interface{}
 	empty, err := json.Marshal(x1)
 	d := &DeviceDriver{
@@ -204,16 +213,20 @@ func NewDeviceDriver(opts ...Option) *DeviceDriver {
 		InitialConfig:      make(map[string]interface{}),
 		K8sClient:          new(client.Client),
 		Cache: &Cache{
-			NewUpdates:         new(bool),
-			Data:               make(map[int]map[string]*ResourceData),
-			Levels:             make([]int, 0),
-			DataSubDeltaDelete: &dataSubDeltaDelete,
-			DataSubDeltaUpdate: &dataSubDeltaUpdate,
-			ReApplyCacheData:   new(bool),
-			CurrentConfig:      empty,
+			NewK8sOperatorUpdates: new(bool),
+			NewOnChangeUpdates:    new(bool),
+			OnChangeReApplyCache:  new(bool),
+			Data:                  make(map[int]map[string]*ResourceData),
+			Levels:                make([]int, 0),
+			OnChangeDeletes:       &onChangeDeletes,
+			OnChangeUpdates:       &onChangeUpdates,
+			OnChangeDeviations:    &OnChangeDeviations,
+
+			CurrentConfig: empty,
 		},
-		StopCh: make(chan struct{}),
-		Debug:  new(bool),
+		StopCh:    make(chan struct{}),
+		AutoPilot: new(bool),
+		Debug:     new(bool),
 		//Subscriptions:  new([]string),
 		//ExceptionPaths: new([]string),
 	}
@@ -234,14 +247,6 @@ func NewDeviceDriver(opts ...Option) *DeviceDriver {
 	d.TargetCollector = NewCollector(d.Target)
 
 	return d
-}
-
-func (d *DeviceDriver) InitExceptionPaths(eps *[]string) {
-	d.ExceptionPaths = eps
-}
-
-func (d *DeviceDriver) InitSubscriptions(subs *[]string) {
-	d.Subscriptions = subs
 }
 
 // InitDeviceDriverControllers initializes the device driver controller
@@ -310,26 +315,67 @@ func (d *DeviceDriver) StartReconcileProcess() {
 	log.Info("Starting reconciliation process...")
 	timeout := make(chan bool, 1)
 	timeout <- true
-	log.Info("Timer reconciliation process is running...")
+	//log.Info("Timer reconciliation process is running...")
 	// run the reconcile process on startup
-	*d.Cache.NewUpdates = true
+	*d.Cache.NewK8sOperatorUpdates = true
 	for {
 		select {
 		case <-timeout:
 			time.Sleep(timer * time.Second)
 			timeout <- true
 
-			log.Info("reconcile cache...")
-			if *d.Cache.NewUpdates {
+			// reconcile cache when:
+			// -> new updates from k8s operator are received
+			// -> autopilot is on and new onChange information was reveived that requires device updates
+			// -> autopilot is on and new onChange information was received that requires to repply the cache
+			if *d.Cache.NewK8sOperatorUpdates || (*d.AutoPilot && (*d.Cache.NewOnChangeUpdates || *d.Cache.OnChangeReApplyCache)) {
+				log.Info("........ Started  reconciliation ........")
 				d.ReconcileCache()
+				log.Info("........ Finished reconciliation ........")
 			} else {
-				fmt.Printf(".")
+				//fmt.Printf(".")
 			}
+			// report changes to the deviation server
 			target := "srl-k8s-operator-controller-manager-deviation-service" + "." + "srl-k8s-operator-system" + "." + "svc.cluster.local" + ":" + "9998"
-			if _, err := deviationUpdate(d.Ctx, stringPtr(target), stringPtr("testingResource")); err != nil {
-				log.WithError(err).Error("failed to update deviation server")
+			deviations := make([]*netwdevpb.Deviation, 0)
+			d.Cache.Mutex.Lock()
+			for xpath, deviation := range *d.Cache.OnChangeDeviations {
+				if deviation.Change {
+					//var x1 interface{}
+					//data := json.Unmarshal(deviation.Value, x1)
+					// In auto-pilot mode, only report changes that are ignored by Exception paths
+					if *d.AutoPilot && deviation.DeviationAction == netwdevpb.Deviation_DeviationActionIgnoreException {
+						log.Infof("Deviation: %s Change: %t OnChangeAction %s, DeviationAction %s, Data %v", xpath, deviation.Change, deviation.OnChangeAction.String(), deviation.DeviationAction.String(), string(deviation.Value))
+						dev := &netwdevpb.Deviation{
+							OnChange:       deviation.OnChangeAction,
+							DevationResult: deviation.DeviationAction,
+							Xpath:          xpath,
+							Value:          deviation.Value,
+						}
+						deviations = append(deviations, dev)
+					}
+					// in operator controlled mode we report all changes, except the once we should ignore
+					if !*d.AutoPilot && deviation.DeviationAction != netwdevpb.Deviation_DeviationActionIgnore {
+						log.Infof("Deviation: %s Change: %t OnChangeAction %s, DeviationAction %s, Data %v", xpath, deviation.Change, deviation.OnChangeAction.String(), deviation.DeviationAction.String(), string(deviation.Value))
+						dev := &netwdevpb.Deviation{
+							OnChange:       deviation.OnChangeAction,
+							DevationResult: deviation.DeviationAction,
+							Xpath:          xpath,
+							Value:          deviation.Value,
+						}
+						deviations = append(deviations, dev)
+					}
+				}
+				// update the change status to ensure we dont report it next time
+				deviation.Change = false
 			}
-
+			d.Cache.Mutex.Unlock()
+			// only report deviations if there are changes
+			if len(deviations) > 0 {
+				if _, err := deviationUpdate(d.Ctx, stringPtr(target), deviations); err != nil {
+					log.WithError(err).Error("failed to update deviation server")
+				}
+			}
 		case <-d.StopCh:
 			log.Info("Stopping timer reconciliation process")
 			return
@@ -351,13 +397,13 @@ func (d *DeviceDriver) StartGnmiSubscriptionHandler() {
 	for {
 		select {
 		case resp := <-chanSubResp:
-			log.Infof("SubRsp Response %v", resp)
-			d.validateDiff(resp.Response)
+			//log.Infof("SubRsp Response %v", resp)
+			d.processOnChangeUpdates(resp.Response)
 		case tErr := <-chanSubErr:
 			log.Errorf("subscribe error: %v", tErr)
 			time.Sleep(60 * time.Second)
 		case <-d.StopCh:
-			log.Info("Stopping subscription process")
+			//log.Info("Stopping subscription process")
 			return
 		}
 	}
@@ -428,8 +474,8 @@ func (d *DeviceDriver) DiscoverDeviceDetails() error {
 func cleanConfig(x1 map[string]interface{}) map[string]interface{} {
 	x2 := make(map[string]interface{})
 	for k1, v1 := range x1 {
-		log.Infof("cleanConfig Key: %s", k1)
-		log.Infof("cleanConfig Value: %v", v1)
+		//log.Infof("cleanConfig Key: %s", k1)
+		//log.Infof("cleanConfig Value: %v", v1)
 		switch x3 := v1.(type) {
 		case []interface{}:
 			x := make([]interface{}, 0)

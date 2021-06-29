@@ -55,9 +55,9 @@ func (c *Cache) Update(ctx context.Context, req *netwdevpb.CacheUpdateRequest) (
 
 	c.Data[level][req.Resource] = &ResourceData{
 		Config:      req,
-		CacheStatus: netwdevpb.CacheStatusReply_ToBeProcessed,
+		CacheStatus: netwdevpb.CacheStatusReply_CacheResourceStatusToBeProcessed,
 	}
-	*c.NewUpdates = true
+	*c.NewK8sOperatorUpdates = true
 	c.Mutex.Unlock()
 	reply := &netwdevpb.CacheUpdateReply{}
 	return reply, nil

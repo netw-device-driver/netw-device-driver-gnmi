@@ -36,6 +36,7 @@ var (
 	//natsServer         string
 	cacheServerAddress string
 	deviceName         string
+	autoPilot          bool
 	debug              bool
 	rootCaCsrTemplate  = "/templates/ca/csr-root-ca.json"
 	certCsrTemplate    = "/templates/ca/csr.json"
@@ -53,6 +54,9 @@ func InitFlags(fs *pflag.FlagSet) {
 
 	fs.StringVar(&deviceName, "device-name", "leaf1",
 		"Name of the device the driver serves")
+
+	fs.BoolVar(&autoPilot, "autopilot", true,
+		"Apply delta/diff changes to the config automatically when set to true, if set to false the device driver will report the delta and the operator should intervene what to do with the delta/diffs")
 
 	fs.BoolVar(&debug, "debug", true,
 		"Debug control")
@@ -151,6 +155,7 @@ func main() {
 		ddriver.WithGzip(ddriver.BoolPtr(false)),
 		ddriver.WithTimeout(10 * time.Second),
 		//ddriver.WithEncoding(nn.Spec.Target.Encoding),
+		ddriver.WithAutoPilot(&autoPilot),
 		ddriver.WithDebug(&debug),
 	}
 
@@ -177,39 +182,51 @@ func main() {
 	}
 
 	// get ConfigMap information -> subscription and subscription exceptions
-	var namespace string
-	var cmName string
-	switch *d.NetworkNodeKind {
-	case "nokia_srl":
-		namespace = "nddriver-system"
-		cmName = "srl-k8s-subscription-config"
-	}
-	log.Infof("kind: %s", *d.NetworkNodeKind)
-	log.Infof("namespace: %s", namespace)
-	log.Infof("cmName: %s", cmName)
-	cmKey := types.NamespacedName{
-		Namespace: namespace,
-		Name:      cmName,
-	}
-	cm := &corev1.ConfigMap{}
-	if err := c.Get(context.TODO(), cmKey, cm); err != nil {
-		log.WithError(err).Error("Failed to get ConfigMap")
-	}
+	d.InitSubscriptionExceptionPaths()
 
-	log.Infof("ConfigMap Data: %v", cm.Data)
-	if ep, ok := cm.Data["excption-paths"]; ok {
-		eps := strings.Split(ep, " ")
-		log.Infof("ConfigMap excption-paths data: %v", eps)
-		d.InitExceptionPaths(&eps)
-	}
-	log.Infof("ConfigMap exception-paths data: %v", *d.ExceptionPaths)
+	/*
+		var namespace string
+		var cmName string
+		switch *d.NetworkNodeKind {
+		case "nokia_srl":
+			namespace = "nddriver-system"
+			cmName = "srl-k8s-subscription-config"
+		}
+		log.Infof("kind: %s", *d.NetworkNodeKind)
+		log.Infof("namespace: %s", namespace)
+		log.Infof("cmName: %s", cmName)
+		cmKey := types.NamespacedName{
+			Namespace: namespace,
+			Name:      cmName,
+		}
+		cm := &corev1.ConfigMap{}
+		if err := c.Get(context.TODO(), cmKey, cm); err != nil {
+			log.WithError(err).Error("Failed to get ConfigMap")
+		}
 
-	if sp, ok := cm.Data["subscriptions"]; ok {
-		sps := strings.Split(sp, " ")
-		//log.Infof("ConfigMap subscriptions data: %v", sps)
-		d.InitSubscriptions(&sps)
-	}
-	log.Infof("ConfigMap subscriptions data: %v", *d.Subscriptions)
+		// configmap with subscriptions and exception paths
+		log.Infof("ConfigMap Data: %v", cm.Data)
+		if ep, ok := cm.Data["exception-paths"]; ok {
+			eps := strings.Split(ep, " ")
+			log.Infof("ConfigMap excption-paths data: %v", eps)
+			d.InitExceptionPaths(&eps)
+		}
+		log.Infof("ConfigMap exception-paths data: %v", *d.ExceptionPaths)
+
+		if ep, ok := cm.Data["explicit-exception-paths:"]; ok {
+			eps := strings.Split(ep, " ")
+			log.Infof("ConfigMap explicit-exception-paths: data: %v", eps)
+			d.InitExplicitExceptionPaths(&eps)
+		}
+		log.Infof("ConfigMap exception-paths data: %v", *d.ExceptionPaths)
+
+		if sp, ok := cm.Data["subscriptions"]; ok {
+			sps := strings.Split(sp, " ")
+			//log.Infof("ConfigMap subscriptions data: %v", sps)
+			d.InitSubscriptions(&sps)
+		}
+		log.Infof("ConfigMap subscriptions data: %v", *d.Subscriptions)
+	*/
 
 	d.UpdateLatestConfigWithGnmi()
 

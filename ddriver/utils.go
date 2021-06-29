@@ -23,6 +23,33 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+func cleanStr(s string) string {
+	ss := strings.Split(s, ":")
+	if len(ss) > 1 {
+		return ss[1]
+	}
+	return ss[0]
+}
+
+func getKeyInfo(keys map[string]string) ([]string, []string) {
+	keyName := make([]string, 0)
+	keyValue := make([]string, 0)
+	for k, v := range keys {
+		keyName = append(keyName, k)
+		keyValue = append(keyValue, v)
+	}
+	return keyName, keyValue
+}
+
+/*
+func checkKeyMatch(x map[string]interface{}, keyNames []string) (interface{}, bool) {
+	for _, keyName := range keyNames {
+		if
+	}
+	return nil, false
+}
+*/
+
 func contains(s []int, e int) bool {
 	for _, a := range s {
 		if a == e {
@@ -33,6 +60,7 @@ func contains(s []int, e int) bool {
 }
 
 func stringPtr(s string) *string { return &s }
+func boolPtr(b bool) *bool       { return &b }
 
 /*
 type reversedMap struct {

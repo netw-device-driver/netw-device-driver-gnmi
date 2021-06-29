@@ -9,7 +9,7 @@ require (
 	github.com/karimra/gnmic v0.9.1
 	github.com/mitchellh/mapstructure v1.3.3 // indirect
 	github.com/netw-device-driver/netw-device-controller v0.1.6
-	github.com/netw-device-driver/netwdevpb v0.1.19
+	github.com/netw-device-driver/netwdevpb v0.1.23
 	github.com/openconfig/gnmi v0.0.0-20210226144353-8eae1937bf84
 	github.com/r3labs/diff/v2 v2.12.0
 	github.com/sirupsen/logrus v1.8.1

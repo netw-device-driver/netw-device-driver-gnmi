@@ -47,7 +47,7 @@ type Client struct {
 }
 
 // UpdateCache updates the cache
-func (c *Client) DeviationUpdate(ctx context.Context, req *netwdevpb.DeviationUpdate) (*netwdevpb.DeviationUpdateReply, error) {
+func (c *Client) DeviationUpdate(ctx context.Context, req *netwdevpb.DeviationUpdateRequest) (*netwdevpb.DeviationUpdateReply, error) {
 	// Connect Options.
 	var opts []grpc.DialOption
 	if c.Insecure {
@@ -67,7 +67,7 @@ func (c *Client) DeviationUpdate(ctx context.Context, req *netwdevpb.DeviationUp
 		return nil, err
 	}
 	defer conn.Close()
-	client := netwdevpb.NewDeviationClient(conn)
+	client := netwdevpb.NewDeviationUpdateClient(conn)
 
 	return client.Update(timeoutCtx, req)
 }

@@ -23,14 +23,14 @@ import (
 	"github.com/netw-device-driver/netwdevpb"
 )
 
-func deviationUpdate(ctx context.Context, target, resource *string) (*netwdevpb.DeviationUpdateReply, error) {
+func deviationUpdate(ctx context.Context, target *string, deviations []*netwdevpb.Deviation) (*netwdevpb.DeviationUpdateReply, error) {
 	c := &grpcc.Client{
 		Insecure:   true,
 		SkipVerify: true,
 		Target:     *target,
 	}
-	req := &netwdevpb.DeviationUpdate{
-		Resource: *resource,
+	req := &netwdevpb.DeviationUpdateRequest{
+		Deviations: deviations,
 	}
 	return c.DeviationUpdate(ctx, req)
 }
