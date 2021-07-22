@@ -24,7 +24,7 @@ import (
 	"strings"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/netw-device-driver/netw-device-driver-gnmi/pkg/gnmic"
+	"github.com/netw-device-driver/netw-device-driver-gnmi/internal/gnmic"
 	"github.com/netw-device-driver/netwdevpb"
 	"github.com/openconfig/gnmi/proto/gnmi"
 	"github.com/r3labs/diff/v2"
@@ -101,17 +101,6 @@ const (
 
 func SubscriptionActionPtr(s SubcriptionAction) *SubcriptionAction { return &s }
 */
-
-func (c *Cache) locatePathInCache(pel []*gnmi.PathElem) (interface{}, bool, error) {
-	var x1 interface{}
-	err := json.Unmarshal(c.CurrentConfig, &x1)
-	if err != nil {
-		return nil, false, err
-	}
-	_, x1, f := findPathInTree(x1, pel, 0)
-	// TODO validate data
-	return x1, f, nil
-}
 
 func findPathInTree(x1 interface{}, pel []*gnmi.PathElem, i int) (int, interface{}, bool) {
 	log.Infof("pel entry: %d %v %v", i, cleanStr(pel[i].GetName()), pel[i].GetKey())
@@ -362,7 +351,7 @@ func (d *DeviceDriver) processOnChangeUpdates(resp *gnmi.SubscribeResponse) erro
 			// subscription DELETE per xpath
 			_, xpath := gnmiPathToXPath(del.GetElem())
 			// the cache data is not relevant in a on-change delete scenario so we ignore it
-			x1, f, err := d.Cache.locatePathInCache(del.GetElem())
+			x1, f, err := d.Cache.LocatePathInCache(del.GetElem())
 			if err != nil {
 				return fmt.Errorf("On-Change subscription: locate path in cache error %v", err)
 			}
@@ -404,7 +393,7 @@ func (d *DeviceDriver) processOnChangeUpdates(resp *gnmi.SubscribeResponse) erro
 			if err != nil {
 				return err
 			}
-			x1, f, err := d.Cache.locatePathInCache(upd.GetPath().GetElem())
+			x1, f, err := d.Cache.LocatePathInCache(upd.GetPath().GetElem())
 			if err != nil {
 				return fmt.Errorf("On-Change subscription: locate path in cache error %v", err)
 			}
@@ -454,7 +443,7 @@ func (d *DeviceDriver) processOnChangeUpdates(resp *gnmi.SubscribeResponse) erro
 			onChangeDeviations[xpath] = deviation
 			//log.Infof("Subscription update %d: xpath: %s, found %t", i, xpath, f)
 		}
-		d.Cache.OnChangeCacheUpdates(d.AutoPilot, &onChangeDeviations)
+		d.Cache.SetOnChangeCacheUpdates(*d.AutoPilot, onChangeDeviations)
 
 	case *gnmi.SubscribeResponse_SyncResponse:
 	}
@@ -682,13 +671,13 @@ func getExceptionPaths() []string {
 
 func (d *DeviceDriver) checkExceptionXpath(xpath string) bool {
 	// when the xpath is part of an exception path we can ignore it -> lpm match
-	for _, ep := range *d.ExceptionPaths {
+	for _, ep := range d.Registrator.GetExceptionPaths() {
 		if strings.Contains(xpath, ep) {
 			return true
 		}
 	}
 	// in case there is a match for the explicit exception path -> should be exact match
-	for _, eep := range *d.ExplicitExceptionPaths {
+	for _, eep := range d.Registrator.GetExplicitExceptionPaths() {
 		if xpath == eep {
 			return true
 		}

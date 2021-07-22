@@ -15,7 +15,7 @@ else
 GOBIN=$(shell go env GOBIN)
 endif
 
-all: netwdevicedriver-gnmi
+all: build
 
 # Run tests
 ENVTEST_ASSETS_DIR=$(shell pwd)/testbin
@@ -25,12 +25,12 @@ test: fmt vet
 	source ${ENVTEST_ASSETS_DIR}/setup-envtest.sh; fetch_envtest_tools $(ENVTEST_ASSETS_DIR); setup_envtest_env $(ENVTEST_ASSETS_DIR); go test ./... -coverprofile cover.out
 
 # Build binary
-netwdevicedriver-gnmi: fmt vet
-	go build -o bin/netwdevicedriver-gnmi main.go
+build: fmt vet ## Build binaries: manager and cli
+	go build -o bin/ddriver ./cmd/ddcore/main.go
 
 # Run against the configured Kubernetes cluster in ~/.kube/config
-run: fmt vet manifests
-	go run ./main.go
+#run: fmt vet manifests
+#	go run ./main.go
 
 # Run go fmt against code
 fmt:

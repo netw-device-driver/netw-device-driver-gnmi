@@ -17,36 +17,41 @@ limitations under the License.
 package ddriver
 
 import (
-	//nddv1 "github.com/netw-device-driver/netw-device-controller/api/v1"
+	"context"
+	"strings"
 
-	log "github.com/sirupsen/logrus"
+	ndddvrv1 "github.com/netw-device-driver/ndd-core/apis/dvr/v1"
+	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 )
 
-func (d *DeviceDriver) ConfigMapUpdate(jsonStr *string) error {
+const (
+	errGetConfigMap    = "cannot get configmap"
+	errUpdateConfigMap = "cannot update configmap"
+)
 
+// UpdateDeviceStatusReady updates a set of resources
+func (e *APIEstablisher) UpdateConfigMap(ctx context.Context, cfg *string) error { // nolint:gocyclo
 	cmKey := types.NamespacedName{
-		Namespace: "nddriver-system",
-		Name:      "nddriver-cm-" + *d.DeviceName,
+		Namespace: e.namespaceDeployment,
+		Name:      strings.Join([]string{ndddvrv1.PrefixConfigmap, e.deviceName}, "-"),
 	}
 	cm := &corev1.ConfigMap{}
-	if err := (*d.K8sClient).Get(d.Ctx, cmKey, cm); err != nil {
-		log.WithError(err).Error("Failed to get configmap")
-		return err
+	if err := e.client.Get(ctx, cmKey, cm); err != nil {
+		return errors.Wrap(err, errGetConfigMap)
 	}
 	if cm.Data == nil {
 		cm.Data = make(map[string]string)
 	}
 
-	cm.Data["config.json"] = *jsonStr
+	cm.Data[ndddvrv1.ConfigmapJsonConfig] = *cfg
 
-	err := (*d.K8sClient).Update(d.Ctx, cm)
+	err := e.client.Update(ctx, cm)
 	if err != nil {
-		log.WithError(err).Error("Failed to update configmap")
-		return err
+		return errors.Wrap(err, errUpdateConfigMap)
 	}
-	log.Infof("updated configmap...")
+	e.log.Debug("updated configmap...")
 
 	return nil
 }

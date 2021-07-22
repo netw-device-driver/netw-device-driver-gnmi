@@ -59,9 +59,6 @@ func contains(s []int, e int) bool {
 	return false
 }
 
-func stringPtr(s string) *string { return &s }
-func boolPtr(b bool) *bool       { return &b }
-
 /*
 type reversedMap struct {
 	Index   int
@@ -369,12 +366,3 @@ func addObject(x1, x2 interface{}, ekv []ElementKeyValue, i int) interface{} {
 	log.Debugf("return x1")
 	return x1
 }
-
-// BoolPtr return pointer to boolean
-func BoolPtr(b bool) *bool { return &b }
-
-// StringPtr return pointer to boolean
-func StringPtr(s string) *string { return &s }
-
-// Uint32Ptr return pointer to uint32
-func Uint32Ptr(s uint32) *uint32 { return &s }

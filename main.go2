@@ -18,7 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
-	nddv1 "github.com/netw-device-driver/netw-device-controller/api/v1"
+	ndddvrv1 "github.com/netw-device-driver/ndd-core/apis/dvr/v1"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -28,7 +28,7 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(nddv1.AddToScheme(scheme))
+	utilruntime.Must(ndddvrv1.AddToScheme(scheme))
 }
 
 var (
@@ -69,37 +69,7 @@ func main() {
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
 	pflag.Parse()
 
-	/*
-		if debug {
-			log.SetLevel(log.DebugLevel)
-			cfssllog.Level = cfssllog.LevelDebug
-		} else {
-			log.SetLevel(log.InfoLevel)
-			cfssllog.Level = cfssllog.LevelError
-		}
-
-		tpl, err := template.ParseFiles(rootCaCsrTemplate)
-		if err != nil {
-			log.WithError(err).Error("failed to parse rootCACsrTemplate")
-		}
-		_, err = util.GenerateRootCa(tpl, util.CaRootInput{Prefix: deviceName})
-		if err != nil {
-			log.WithError(err).Error("failed to generate rootCa")
-		}
-
-		// generate proxy CA
-		certTpl, err := template.ParseFiles(certCsrTemplate)
-		if err != nil {
-			log.WithError(err).Error("failed to parse certCsrTemplate")
-		}
-
-		_, err = util.GenerateCert(
-			deviceName,
-			path.Join(util.DirLabCAroot, "root-ca.pem"),
-			path.Join(util.DirLabCAroot, "root-ca-key.pem"),
-			certTpl,
-		)
-	*/
+	//TODO add certification
 
 	// get cacheServerAddress ip from the environment
 	cacheServerAddress = os.Getenv("POD_IP") + ":" + strings.Split(cacheServerAddress, ":")[1]
@@ -120,7 +90,7 @@ func main() {
 		Namespace: "default",
 		Name:      deviceName,
 	}
-	nn := &nddv1.NetworkNode{}
+	nn := &ndddvrv1.NetworkNode{}
 	if err := c.Get(context.TODO(), nnKey, nn); err != nil {
 		log.WithError(err).Error("Failed to get NetworkNode")
 		os.Exit(1)

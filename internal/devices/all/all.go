@@ -14,23 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package ddriver
+package all
 
 import (
-	"context"
-
-	"github.com/netw-device-driver/netw-device-driver-gnmi/pkg/grpcc"
-	"github.com/netw-device-driver/netwdevpb"
+	_ "github.com/netw-device-driver/netw-device-driver-gnmi/internal/devices/srl"
+	_ "github.com/netw-device-driver/netw-device-driver-gnmi/internal/devices/sros"
 )
-
-func deviationUpdate(ctx context.Context, target *string, deviations []*netwdevpb.Deviation) (*netwdevpb.DeviationUpdateReply, error) {
-	c := &grpcc.Client{
-		Insecure:   true,
-		SkipVerify: true,
-		Target:     *target,
-	}
-	req := &netwdevpb.DeviationUpdateRequest{
-		Deviations: deviations,
-	}
-	return c.DeviationUpdate(ctx, req)
-}

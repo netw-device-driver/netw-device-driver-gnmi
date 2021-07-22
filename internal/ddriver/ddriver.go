@@ -21,60 +21,86 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/karimra/gnmic/collector"
-	nddv1 "github.com/netw-device-driver/netw-device-controller/api/v1"
+	ndddvrv1 "github.com/netw-device-driver/ndd-core/apis/dvr/v1"
+	"github.com/netw-device-driver/ndd-runtime/pkg/logging"
+	"github.com/netw-device-driver/ndd-runtime/pkg/utils"
+	"github.com/netw-device-driver/netw-device-driver-gnmi/internal/devices"
+	_ "github.com/netw-device-driver/netw-device-driver-gnmi/internal/devices/all"
 	"github.com/netw-device-driver/netwdevpb"
-	"github.com/openconfig/gnmi/proto/gnmi_ext"
-	log "github.com/sirupsen/logrus"
+	"github.com/pkg/errors"
 	"google.golang.org/grpc"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-const timer = 1
+const (
+	// timers
+	timer = 1
 
-// DeviceeDetails struct
-/*
-type DeviceDetails struct {
-	// the Kind of hardware
-	Kind *string `json:"kind,omitempty"`
-	// the Mac address of the hardware
-	MacAddress *string `json:"macAddress,omitempty"`
-	// the Serial Number of the hardware
-	SerialNumber *string `json:"serialNumber,omitempty"`
-}
-*/
+	// errors
+	errSetupGnmi             = "cannot setup gnmi connection"
+	errCreateTcpListener     = "cannot create tcp listener"
+	errGrpcServer            = "error grpc server"
+	errUpdateDeviationServer = "cannot update Deviation Server"
+	errJsonMarshal           = "errors json marshal"
+	errStartGRPCServer       = "error start grpc server"
+)
 
 // DeviceDriver contains the device driver information
 type DeviceDriver struct {
-	//NatsServer         *string
-	CacheServerPort        *int
-	CacheServerAddress     *string
-	DeviceName             *string
-	TargetConfig           *collector.TargetConfig
-	Target                 *collector.Target
-	TargetCollector        *Collector
-	K8sClient              *client.Client
-	NetworkNodeKind        *string
-	DeviceDetails          *nddv1.DeviceDetails
-	InitialConfig          map[string]interface{}
-	Subscriptions          *[]string
-	ExceptionPaths         *[]string
-	ExplicitExceptionPaths *[]string
-	AutoPilot              *bool
-	Debug                  *bool
+	log                logging.Logger
+	Device             devices.Device
+	Objects            Establisher
+	Discoverer         Discoverer
+	Collector          Collector
+	CacheServerPort    *int
+	CacheServerAddress *string
+	DeviceName         *string
+	TargetConfig       *collector.TargetConfig
+	Target             *collector.Target
+	K8sClient          *client.Client
+	NetworkNodeKind    *string
+	DeviceDetails      *ndddvrv1.DeviceDetails
+	InitialConfig      map[string]interface{}
+	GrpcServer         *grpc.Server
 
-	Cache  *Cache
-	StopCh chan struct{}
-	Ctx    context.Context
+	AutoPilot *bool
+	Debug     *bool
+
+	Registrator *Registrator
+	Cache       *Cache
+	SubCh       chan bool
+	StopCh      chan struct{}
+	Ctx         context.Context
 }
 
 // Option is a function to initialize the options of the device driver
 type Option func(d *DeviceDriver)
+
+func WithContext() Option {
+	return func(d *DeviceDriver) {
+		d.Ctx = context.Background()
+	}
+}
+
+// WithLogger specifies how the Reconciler should log messages.
+func WithLogger(log logging.Logger) Option {
+	return func(d *DeviceDriver) {
+		d.log = log
+	}
+}
+
+// WithEstablisher specifies how the ddriver should create/delete/update
+// resources through the k8s api
+func WithEstablisher(er *APIEstablisher) Option {
+	return func(d *DeviceDriver) {
+		d.Objects = er
+	}
+}
 
 // WithCacheServer initializes the cache server in the device driver
 func WithCacheServer(s *string) Option {
@@ -198,33 +224,17 @@ func WithDebug(b *bool) Option {
 }
 
 // NewDeviceDriver function defines a new device driver
-func NewDeviceDriver(opts ...Option) *DeviceDriver {
-	log.Info("initialize new device driver ...")
-	onChangeDeletes := make([]string, 0)
-	onChangeUpdates := make([]string, 0)
-	OnChangeDeviations := make(map[string]*Deviation)
-	var x1 interface{}
-	empty, err := json.Marshal(x1)
+func NewDeviceDriver(opts ...Option) (*DeviceDriver, error) {
 	d := &DeviceDriver{
 		CacheServerAddress: new(string),
 		DeviceName:         new(string),
-		DeviceDetails:      new(nddv1.DeviceDetails),
+		DeviceDetails:      new(ndddvrv1.DeviceDetails),
 		TargetConfig:       new(collector.TargetConfig),
 		InitialConfig:      make(map[string]interface{}),
 		K8sClient:          new(client.Client),
-		Cache: &Cache{
-			NewK8sOperatorUpdates: new(bool),
-			NewOnChangeUpdates:    new(bool),
-			OnChangeReApplyCache:  new(bool),
-			Data:                  make(map[int]map[string]*ResourceData),
-			Levels:                make([]int, 0),
-			OnChangeDeletes:       &onChangeDeletes,
-			OnChangeUpdates:       &onChangeUpdates,
-			OnChangeDeviations:    &OnChangeDeviations,
 
-			CurrentConfig: empty,
-		},
-		StopCh:    make(chan struct{}),
+		//SubCh:     make(chan struct{}),
+		//StopCh:    make(chan struct{}),
 		AutoPilot: new(bool),
 		Debug:     new(bool),
 		//Subscriptions:  new([]string),
@@ -236,39 +246,77 @@ func NewDeviceDriver(opts ...Option) *DeviceDriver {
 	}
 
 	d.Target = collector.NewTarget(d.TargetConfig)
-
-	d.Ctx = context.Background()
-	err = d.Target.CreateGNMIClient(d.Ctx, grpc.WithBlock()) // TODO add dialopts
+	err := d.Target.CreateGNMIClient(d.Ctx, grpc.WithBlock()) // TODO add dialopts
 	if err != nil {
-		log.WithError(err).Error("unable to setup the GNMI connection")
-		os.Exit(1)
+		return nil, errors.Wrap(err, errSetupGnmi)
+	}
+	// initialize a discoverer to discover device kinds
+	d.Discoverer = NewDeviceDiscoverer(d.Target, d.log)
+
+	// initialize a collector as a telemtry collector
+	d.Collector = NewDeviceCollector(d.Target, d.log)
+
+	// initialize a subscriber as a grpc server to retreive the registration
+	d.SubCh = make(chan bool)
+	d.Registrator = NewRegistrator(d.log, d.SubCh)
+
+	// initialize the cache
+	d.Cache, err = NewCache(d.log)
+
+	return d, nil
+}
+
+func (d *DeviceDriver) InitGrpcServer() error {
+	d.log.Debug("init grpc server ...")
+	errChannel := make(chan error)
+	go func() {
+		if err := d.StartGrpcServer(*d.CacheServerAddress); err != nil {
+			errChannel <- errors.Wrap(err, errStartGRPCServer)
+		}
+		errChannel <- nil
+	}()
+	return <-errChannel
+}
+
+// StartGRPCServer starts the grpcs server
+func (d *DeviceDriver) StartGrpcServer(s string) error {
+	d.log.Debug("starting GRPC server...")
+
+	// create a listener on a specific address:port
+	lis, err := net.Listen("tcp", s)
+	if err != nil {
+		return errors.Wrap(err, errCreateTcpListener)
 	}
 
-	d.TargetCollector = NewCollector(d.Target)
+	// create a gRPC server object
+	d.GrpcServer = grpc.NewServer()
 
-	return d
+	// attach the gRPC service to the server
+	netwdevpb.RegisterCacheStatusServer(d.GrpcServer, d.Cache)
+	netwdevpb.RegisterCacheUpdateServer(d.GrpcServer, d.Cache)
+	netwdevpb.RegisterRegistrationServer(d.GrpcServer, d.Registrator)
+
+	// start the server
+	if err := d.GrpcServer.Serve(lis); err != nil {
+		return errors.Wrap(err, errGrpcServer)
+	}
+	return nil
+}
+
+func (d *DeviceDriver) StopGrpcServer() {
+	d.GrpcServer.Stop()
 }
 
 // InitDeviceDriverControllers initializes the device driver controller
 func (d *DeviceDriver) InitDeviceDriverControllers() error {
-	log.Info("initialize device driver controllers ...")
+	d.log.Debug("initialize device driver controllers ...")
 	// stopCh to synchronize the finalization for a graceful shutdown
 	d.StopCh = make(chan struct{})
 	defer close(d.StopCh)
 
-	// Create a context.
-	//ctx, cancel := context.WithCancel(context.Background())
-
-	d.Ctx = context.Background()
-
 	// start reconcile device driver
 	go func() {
 		d.StartReconcileProcess()
-	}()
-
-	// start grpc server
-	go func() {
-		d.StartCacheGRPCServer()
 	}()
 
 	// start gnmi subscription handler
@@ -278,46 +326,21 @@ func (d *DeviceDriver) InitDeviceDriverControllers() error {
 
 	select {
 	case <-d.Ctx.Done():
-		log.Info("context cancelled")
+		d.log.Debug("context cancelled")
 	}
 	close(d.StopCh)
-
-	//cancel()
 
 	return nil
 }
 
-// StartCacheGRPCServer function
-func (d *DeviceDriver) StartCacheGRPCServer() {
-	log.Info("Starting cache GRPC server...")
-
-	// create a listener on a specific address:port
-	lis, err := net.Listen("tcp", *d.CacheServerAddress)
-	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
-	}
-
-	// create a gRPC server object
-	grpcServer := grpc.NewServer()
-
-	// attach the gRPC service to the server
-	netwdevpb.RegisterCacheStatusServer(grpcServer, d.Cache)
-	netwdevpb.RegisterCacheUpdateServer(grpcServer, d.Cache)
-
-	// start the server
-	if err := grpcServer.Serve(lis); err != nil {
-		log.Fatalf("failed to serve: %s", err)
-	}
-}
-
 // StartReconcileProcess starts the driver reconciiation process
-func (d *DeviceDriver) StartReconcileProcess() {
-	log.Info("Starting reconciliation process...")
+func (d *DeviceDriver) StartReconcileProcess() error {
+	d.log.Debug("Starting reconciliation process...")
 	timeout := make(chan bool, 1)
 	timeout <- true
 	//log.Info("Timer reconciliation process is running...")
 	// run the reconcile process on startup
-	*d.Cache.NewK8sOperatorUpdates = true
+	d.Cache.SetNewK8sOperatorUpdates(true)
 	for {
 		select {
 		case <-timeout:
@@ -328,24 +351,24 @@ func (d *DeviceDriver) StartReconcileProcess() {
 			// -> new updates from k8s operator are received
 			// -> autopilot is on and new onChange information was reveived that requires device updates
 			// -> autopilot is on and new onChange information was received that requires to repply the cache
-			if *d.Cache.NewK8sOperatorUpdates || (*d.AutoPilot && (*d.Cache.NewOnChangeUpdates || *d.Cache.OnChangeReApplyCache)) {
-				log.Info("........ Started  reconciliation ........")
-				d.ReconcileCache()
-				log.Info("........ Finished reconciliation ........")
+			if d.Cache.GetNewK8sOperatorUpdates() || (*d.AutoPilot && (d.Cache.GetNewOnChangeUpdates() || d.Cache.GetOnChangeReApplyCache())) {
+				d.log.Debug("........ Started  reconciliation ........")
+				//d.ReconcileCache()
+				d.log.Debug("........ Finished reconciliation ........")
 			} else {
 				//fmt.Printf(".")
 			}
 			// report changes to the deviation server
 			target := "srl-k8s-operator-controller-manager-deviation-service" + "." + "srl-k8s-operator-system" + "." + "svc.cluster.local" + ":" + "9998"
 			deviations := make([]*netwdevpb.Deviation, 0)
-			d.Cache.Mutex.Lock()
-			for xpath, deviation := range *d.Cache.OnChangeDeviations {
+			d.Cache.Lock()
+			for xpath, deviation := range d.Cache.GetOnChangeDeviations() {
 				if deviation.Change {
 					//var x1 interface{}
 					//data := json.Unmarshal(deviation.Value, x1)
 					// In auto-pilot mode, only report changes that are ignored by Exception paths
 					if *d.AutoPilot && deviation.DeviationAction == netwdevpb.Deviation_DeviationActionIgnoreException {
-						log.Infof("Deviation: %s Change: %t OnChangeAction %s, DeviationAction %s, Data %v", xpath, deviation.Change, deviation.OnChangeAction.String(), deviation.DeviationAction.String(), string(deviation.Value))
+						d.log.Debug("Deviation", "deviation", xpath, "Change", deviation.Change, "OnChangeAction", deviation.OnChangeAction.String(), "DeviationAction", deviation.DeviationAction.String(), "Data", string(deviation.Value))
 						dev := &netwdevpb.Deviation{
 							OnChange:       deviation.OnChangeAction,
 							DevationResult: deviation.DeviationAction,
@@ -356,7 +379,7 @@ func (d *DeviceDriver) StartReconcileProcess() {
 					}
 					// in operator controlled mode we report all changes, except the once we should ignore
 					if !*d.AutoPilot && deviation.DeviationAction != netwdevpb.Deviation_DeviationActionIgnore {
-						log.Infof("Deviation: %s Change: %t OnChangeAction %s, DeviationAction %s, Data %v", xpath, deviation.Change, deviation.OnChangeAction.String(), deviation.DeviationAction.String(), string(deviation.Value))
+						d.log.Debug("Deviation", "deviation", xpath, "Change", deviation.Change, "OnChangeAction", deviation.OnChangeAction.String(), "DeviationAction", deviation.DeviationAction.String(), "Data", string(deviation.Value))
 						dev := &netwdevpb.Deviation{
 							OnChange:       deviation.OnChangeAction,
 							DevationResult: deviation.DeviationAction,
@@ -369,28 +392,28 @@ func (d *DeviceDriver) StartReconcileProcess() {
 				// update the change status to ensure we dont report it next time
 				deviation.Change = false
 			}
-			d.Cache.Mutex.Unlock()
+			d.Cache.Unlock()
 			// only report deviations if there are changes
 			if len(deviations) > 0 {
-				if _, err := deviationUpdate(d.Ctx, stringPtr(target), deviations); err != nil {
-					log.WithError(err).Error("failed to update deviation server")
+				if _, err := deviationUpdate(d.Ctx, utils.StringPtr(target), deviations); err != nil {
+					return errors.Wrap(err, errUpdateDeviationServer)
 				}
 			}
 		case <-d.StopCh:
-			log.Info("Stopping timer reconciliation process")
-			return
+			d.log.Debug("Stopping timer reconciliation process")
+			return nil
 		}
 	}
 }
 
 func (d *DeviceDriver) StartGnmiSubscriptionHandler() {
-	log.Info("Starting cache GNMI subscription...")
+	d.log.Debug("Starting cache GNMI subscription...")
 
-	d.TargetCollector.SubscriptionsMutex.RLock()
-	if _, ok := d.TargetCollector.Subscriptions["ConfigChangesubscription"]; !ok {
-		go d.TargetCollector.StartSubscription(d.Ctx, StringPtr("ConfigChangesubscription"), d.Subscriptions)
+	d.Collector.Lock()
+	if d.Collector.GetSubscription("ConfigChangesubscription") {
+		go d.Collector.StartSubscription(d.Ctx, "ConfigChangesubscription", d.Registrator.GetSubscriptions())
 	}
-	d.TargetCollector.SubscriptionsMutex.RUnlock()
+	d.Collector.Unlock()
 
 	chanSubResp, chanSubErr := d.Target.ReadSubscriptions()
 
@@ -400,7 +423,7 @@ func (d *DeviceDriver) StartGnmiSubscriptionHandler() {
 			//log.Infof("SubRsp Response %v", resp)
 			d.processOnChangeUpdates(resp.Response)
 		case tErr := <-chanSubErr:
-			log.Errorf("subscribe error: %v", tErr)
+			d.log.Debug("subscribe", "error", tErr)
 			time.Sleep(60 * time.Second)
 		case <-d.StopCh:
 			//log.Info("Stopping subscription process")
@@ -409,99 +432,9 @@ func (d *DeviceDriver) StartGnmiSubscriptionHandler() {
 	}
 }
 
-// DiscoverDeviceDetails discovers the device details
-func (d *DeviceDriver) DiscoverDeviceDetails() error {
-	log.Info("verifying gnmi capabilities...")
-
-	ext := new(gnmi_ext.Extension)
-	resp, err := d.Target.Capabilities(d.Ctx, ext)
-	if err != nil {
-		return fmt.Errorf("failed sending capabilities request: %v", err)
-	}
-	log.Infof("response: %v", resp)
-
-	for _, sm := range resp.SupportedModels {
-		if strings.Contains(sm.Name, "srl_nokia") {
-			d.NetworkNodeKind = stringPtr("nokia_srl")
-			break
-		}
-		// TODO add other devices
-	}
-
-	log.Infof("gnmi connectivity verified; response: %s, networkNodeInfo %s", resp.GNMIVersion, *d.NetworkNodeKind)
-
-	//dDetails := &nddv1.DeviceDetails{}
-	switch *d.NetworkNodeKind {
-	case "nokia_srl":
-		d.DeviceDetails, err = d.DiscoverDeviceDetailsSRL()
-		if err != nil {
-			return err
-		}
-		d.InitialConfig, err = d.GetInitialConfig()
-		if err != nil {
-			return err
-		}
-		// trim the first map
-		for _, v := range d.InitialConfig {
-			switch v.(type) {
-			case map[string]interface{}:
-				d.InitialConfig = cleanConfig(v.(map[string]interface{}))
-			}
-		}
-		log.Infof("Latest config cleaned: %v", d.InitialConfig)
-	default:
-		// TODO add other devices
-	}
-
-	log.Infof("Device details: %v", d.DeviceDetails)
-	log.Infof("LatestConfig: %v", d.InitialConfig)
-
-	jsonConfigStr, err := json.Marshal(d.InitialConfig)
-	if err != nil {
-		return err
-	}
-	if err := d.ConfigMapUpdate(StringPtr(string(jsonConfigStr))); err != nil {
-		return err
-	}
-
-	if err := d.NetworkNodeUpdate(d.DeviceDetails, nddv1.DiscoveryStatusReady); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func cleanConfig(x1 map[string]interface{}) map[string]interface{} {
-	x2 := make(map[string]interface{})
-	for k1, v1 := range x1 {
-		//log.Infof("cleanConfig Key: %s", k1)
-		//log.Infof("cleanConfig Value: %v", v1)
-		switch x3 := v1.(type) {
-		case []interface{}:
-			x := make([]interface{}, 0)
-			for _, v3 := range x3 {
-				switch x3 := v3.(type) {
-				case map[string]interface{}:
-					x4 := cleanConfig(x3)
-					x = append(x, x4)
-				default:
-					x = append(x, v3)
-				}
-			}
-			x2[strings.Split(k1, ":")[len(strings.Split(k1, ":"))-1]] = x
-		case map[string]interface{}:
-			x4 := cleanConfig(x3)
-			x2[strings.Split(k1, ":")[len(strings.Split(k1, ":"))-1]] = x4
-		default:
-			x2[strings.Split(k1, ":")[len(strings.Split(k1, ":"))-1]] = v1
-		}
-	}
-	return x2
-}
-
 func addElement2ExpceptionTree(et map[string]interface{}, idx int, split []string) map[string]interface{} {
 	// entry does not exist
-	log.Infof("addElement2ExpceptionTree Idx: %d, Split: %v Exception Tree: %v", idx, split, et)
+	//d.log.Debug("addElement2ExpceptionTree", "Index", idx, "Split", split, "Exception Tree", et)
 	if _, ok := et[split[idx]]; !ok {
 		// if there is no more elements in the exception path dont add more
 		// if not initialize for the additional elements in the exception path
@@ -522,7 +455,7 @@ func addElement2ExpceptionTree(et map[string]interface{}, idx int, split []strin
 			case map[string]interface{}:
 				et[split[idx-1]] = addElement2ExpceptionTree(e.(map[string]interface{}), idx, split)
 			default:
-				log.Errorf("addElement2ExpceptionTree: We should never come here")
+				//log.Errorf("addElement2ExpceptionTree: We should never come here")
 			}
 			return et
 		} else {
@@ -567,8 +500,8 @@ func (d *DeviceDriver) ValidateInitalConfig() (err error) {
 */
 
 func compareLatestConfigTree(lc, et map[string]interface{}) map[string]interface{} {
-	log.Infof("Latest    Config: %v", lc)
-	log.Infof("Exception Tree  : %v", et)
+	//log.Infof("Latest    Config: %v", lc)
+	//log.Infof("Exception Tree  : %v", et)
 	found := make(map[string]interface{})
 	for k1, x1 := range lc {
 		k1 := strings.Split(k1, ":")[len(strings.Split(k1, ":"))-1]
@@ -576,7 +509,7 @@ func compareLatestConfigTree(lc, et map[string]interface{}) map[string]interface
 		for k2, v2 := range et {
 			// getHierarchicalElements assumes the string starts with a /
 			ekvl := getHierarchicalElements("/" + k2)
-			log.Infof("ekvl: %v", ekvl)
+			//log.Infof("ekvl: %v", ekvl)
 			if k1 == ekvl[0].Element {
 				if ekvl[0].KeyName != "" {
 					// when a keyname exists, we should delete the found entry w/o the key, since this name will not be used
@@ -587,7 +520,7 @@ func compareLatestConfigTree(lc, et map[string]interface{}) map[string]interface
 							switch x3 := v1.(type) {
 							case map[string]interface{}:
 								for k3, v3 := range x3 {
-									log.Infof("k3: %v, ekvl[0].KeyName: %v", k3, ekvl[0].KeyName)
+									//log.Infof("k3: %v, ekvl[0].KeyName: %v", k3, ekvl[0].KeyName)
 									if k3 == ekvl[0].KeyName {
 										switch v3.(type) {
 										case string, uint32:
@@ -634,14 +567,15 @@ func (d *DeviceDriver) DeletedUnwantedConfiguration(f map[string]interface{}, pr
 		case bool:
 			// if b is false
 			if !b {
-				log.Infof("Delete Path: %s", prefix+k)
+				d.log.Debug("Delete", "Path", prefix+k)
 				ip := prefix + k
-				if err := d.deleteDeviceDataGnmi(&ip); err != nil {
+				_, err := d.Device.Delete(d.Ctx, &ip)
+				if err != nil {
 					// individual path delete process failure
-					log.WithError(err).Errorf("GNMI delete process failed for subscription delta, path: %s", ip)
+					d.log.Debug("GNMI delete process failed for subscription delta", "path", ip)
 				} else {
 					// individual path delete process success
-					log.Infof("GNMI delete processed successfully for subscription delta, path: %s", ip)
+					d.log.Debug("GNMI delete processed successfully for subscription delta", "path", ip)
 				}
 
 			}
@@ -651,17 +585,18 @@ func (d *DeviceDriver) DeletedUnwantedConfiguration(f map[string]interface{}, pr
 	}
 }
 
-func (d *DeviceDriver) UpdateLatestConfigWithGnmi() {
+func (d *DeviceDriver) UpdateLatestConfigWithGnmi() error {
 	mergedPath := "/"
 	newMergedConfig, err := json.Marshal(d.InitialConfig)
 	if err != nil {
-		log.Fatal(err)
+		return errors.Wrap(err, errJsonMarshal)
 	}
-	if err := d.updateDeviceDataGnmi(&mergedPath, newMergedConfig); err != nil {
+	_, err = d.Device.Update(d.Ctx, &mergedPath, newMergedConfig)
+	if err != nil {
 		// TODO check failure status
-		log.WithError(err).Errorf("Merged update process FAILED, path: %s", mergedPath)
+		return errors.Wrap(err, fmt.Sprintf("Merged update process FAILED, path: %s", mergedPath))
 	} else {
-		log.Infof("Merged update process SUCCEEDED, path: %s", mergedPath)
+		d.log.Debug("Merged update process SUCCEEDED, path: %s", mergedPath)
 	}
-
+	return nil
 }

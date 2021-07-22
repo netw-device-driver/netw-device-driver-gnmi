@@ -19,170 +19,29 @@ package ddriver
 import (
 	"context"
 	"encoding/json"
-	"strings"
-	"sync"
 
 	jsonpatch "github.com/evanphx/json-patch"
+	"github.com/netw-device-driver/ndd-runtime/pkg/utils"
 	log "github.com/sirupsen/logrus"
 
-	"github.com/netw-device-driver/netw-device-driver-gnmi/pkg/gnmic"
+	"github.com/netw-device-driver/netw-device-driver-gnmi/internal/gnmic"
 	"github.com/netw-device-driver/netwdevpb"
 )
-
-// Cache contains the
-type Cache struct {
-	netwdevpb.UnimplementedCacheStatusServer
-	netwdevpb.UnimplementedCacheUpdateServer
-
-	Mutex                 sync.RWMutex
-	NewK8sOperatorUpdates *bool
-	Data                  map[int]map[string]*ResourceData
-	Levels                []int
-	NewOnChangeUpdates    *bool
-	OnChangeReApplyCache  *bool
-	OnChangeDeletes       *[]string
-	OnChangeUpdates       *[]string
-	OnChangeDeviations    *map[string]*Deviation
-	CurrentConfig         []byte
-}
-
-type ResourceData struct {
-	Config      *netwdevpb.CacheUpdateRequest
-	CacheStatus netwdevpb.CacheStatusReply_CacheResourceStatus // Status of the resource
-}
-
-func (c *Cache) OnChangeCacheUpdates(autoPilot *bool, onChangeDeviations *map[string]*Deviation) {
-	c.Mutex.Lock()
-
-	for xpath, deviation := range *onChangeDeviations {
-		// update the OnChangeDeviations in the cache
-		(*c.OnChangeDeviations)[xpath] = deviation
-		switch deviation.DeviationAction {
-		case netwdevpb.Deviation_DeviationActionReApplyCache:
-			*c.OnChangeReApplyCache = true
-		case netwdevpb.Deviation_DeviationActionDelete:
-			*c.NewOnChangeUpdates = true
-			*c.OnChangeDeletes = append(*c.OnChangeDeletes, xpath)
-		case netwdevpb.Deviation_DeviationActionIgnore:
-			// do nothing
-		case netwdevpb.Deviation_DeviationActionDeleteIgnoredByParent:
-			// do nothing
-		case netwdevpb.Deviation_DeviationActionIgnoreException:
-			// do nothing
-		default:
-		}
-	}
-	c.Mutex.Unlock()
-}
-
-// SetStatus sets the status of the data
-// l = level, o = object
-func (c *Cache) SetStatus(l int, o string, s netwdevpb.CacheStatusReply_CacheResourceStatus) error {
-	c.Mutex.Lock()
-
-	log.Debugf("New Status for Level: %d, Object: %s, CacheStatus: %s", l, o, s)
-	if d, ok := c.Data[l][o]; ok {
-		d.CacheStatus = s
-	}
-
-	c.Mutex.Unlock()
-	return nil
-}
-
-func (c *Cache) getParentDependencyDeleteStatus(dependencies []string) bool {
-	log.Debugf("Check Parent dependency status: %s", dependencies)
-	for _, l := range c.Levels {
-		for _, data := range c.Data[l] {
-			for i, ip := range data.Config.IndividualActionPath {
-				for _, dep := range dependencies {
-					if dep == ip {
-						return data.Config.IndividualActionPathSuccess[i]
-					}
-				}
-			}
-		}
-	}
-	log.Debug("getParentDependencyDeleteSuccess: We come here since the parent got already deleted")
-	return true
-}
-
-// CheckMissingDependency validates the dependencies of the path
-func (c *Cache) CheckMissingDependency(dependencies []string) bool {
-	log.Debugf("Check missing dependencies: %s", dependencies)
-	for _, l := range c.Levels {
-		for o, data := range c.Data[l] {
-			if len(dependencies) == 0 {
-				// no depedency for this object
-				return false
-			}
-			for _, dep := range dependencies {
-				log.Debugf("Dependency: %s To be checked within Object: %s", o, dep)
-				for _, dp := range data.Config.IndividualActionPath {
-					log.Debugf("Object: %s, ObjDependency: %s Global Dependency: %s", o, dep, dp)
-					if strings.Contains(dp, dep) {
-						// we can check the status since we processed the data before
-						if data.CacheStatus != netwdevpb.CacheStatusReply_CacheResourceStatusDependencyMissing {
-							// no depedency for this object
-							return false
-						}
-					}
-				}
-			}
-		}
-	}
-	// a dependency is missing for this object
-	return true
-}
-
-func (c *Cache) showCacheStatus() {
-	for _, l := range c.Levels {
-		for o, data := range c.Data[l] {
-			log.Infof("CACHE DATA: Object %s, Level: %d, Action: %s, CacheStatus %s, Dependencies: %v, LeafRefDependencies: %v, IndividualPath: %v", o, l, data.Config.Action, data.CacheStatus, data.Config.Dependencies, data.Config.LeafRefDependencies, data.Config.IndividualActionPath)
-		}
-	}
-}
-
-// CheckCache checks if an object exists in the cache
-func (c *Cache) CheckCache(dep string) (int, string, bool) {
-	for _, l := range c.Levels {
-		for o, data := range c.Data[l] {
-			for _, dp := range data.Config.IndividualActionPath {
-				if dp == dep {
-					return l, o, true
-				}
-			}
-		}
-	}
-	return 0, "", false
-}
-
-// UpdateLeafRefDependency validates and updates the leafref dependency status
-func (c *Cache) UpdateLeafRefDependency(leafRefDep string) {
-	for _, l := range c.Levels {
-		for o, data := range c.Data[l] {
-			for _, dp := range data.Config.IndividualActionPath {
-				if dp == leafRefDep {
-					c.SetStatus(l, o, netwdevpb.CacheStatusReply_CacheResourceStatusLeafRefDependency)
-				}
-			}
-		}
-	}
-}
 
 // ReconcileCache reconciles the cache
 func (d *DeviceDriver) ReconcileCache() error {
 	log.Infof("reconcile cache...")
 
 	// show subdelta
-	log.Infof("K8sOperator cache updates: %t", *d.Cache.NewK8sOperatorUpdates)
-	log.Infof("OnChange ReApplyCacheData: %t", *d.Cache.OnChangeReApplyCache)
-	log.Infof("OnChange Delete: %v", *d.Cache.OnChangeDeletes)
-	log.Infof("OnChange Update: %v", *d.Cache.OnChangeUpdates)
+	log.Infof("K8sOperator cache updates: %t", d.Cache.GetNewK8sOperatorUpdates())
+	log.Infof("OnChange ReApplyCacheData: %t", d.Cache.GetOnChangeReApplyCache())
+	log.Infof("OnChange Delete: %v", d.Cache.GetOnChangeDeletes())
+	log.Infof("OnChange Update: %v", d.Cache.GetOnChangeUpdates())
 
 	// show initial config
 	//log.Infof("Initial Config: %v", d.InitialConfig)
 
-	for _, ip := range *d.Cache.OnChangeDeletes {
+	for _, ip := range d.Cache.GetOnChangeDeletes() {
 		// process to delete the object via gnmi
 		if err := d.deleteDeviceDataGnmi(&ip); err != nil {
 			log.WithError(err).Errorf("GNMI delete process failed for subscription delta, path: %s", ip)
@@ -192,7 +51,7 @@ func (d *DeviceDriver) ReconcileCache() error {
 		}
 	}
 
-	for _, ip := range *d.Cache.OnChangeUpdates {
+	for _, ip := range d.Cache.GetOnChangeUpdates() {
 		// process to delete the object via gnmi
 		if err := d.deleteDeviceDataGnmi(&ip); err != nil {
 			log.WithError(err).Errorf("GNMI delete process failed for subscription delta, path: %s", ip)
@@ -205,10 +64,10 @@ func (d *DeviceDriver) ReconcileCache() error {
 	// SHOW CACHE STATUS
 	log.Debugf("Show STATUS before DELETE PRE-PROCESSING")
 	if *d.Debug {
-		d.Cache.showCacheStatus()
+		d.Cache.ShowCacheStatus()
 	}
 
-	if *d.Cache.NewK8sOperatorUpdates || (*d.AutoPilot && *d.Cache.OnChangeReApplyCache) {
+	if d.Cache.GetNewK8sOperatorUpdates() || (*d.AutoPilot && d.Cache.GetOnChangeReApplyCache()) {
 
 		// PROCESS DELETE ACTIONS
 		deletePaths := make(map[int]map[string]*ResourceData)
@@ -501,9 +360,12 @@ func (d *DeviceDriver) ReconcileCache() error {
 				log.Info("The new merged data is EQUAL to the current config, but an object got deleted -> REAPPLY CACHE")
 
 				// update the configmap
-				if err := d.ConfigMapUpdate(StringPtr(string(d.Cache.CurrentConfig))); err != nil {
-					log.WithError(err).Error("Update configmap failed")
+				if err := d.Objects.UpdateConfigMap(d.Ctx, utils.StringPtr(string(d.Cache.CurrentConfig))); err != nil {
+					return err
 				}
+				//if err := d.ConfigMapUpdate(utils.StringPtr(string(d.Cache.CurrentConfig))); err != nil {
+				//	log.WithError(err).Error("Update configmap failed")
+				//}
 
 				//if len(mergedPath) > 0 {
 				log.Infof("MergedUpdatePath: %s", mergedPath)
@@ -532,9 +394,12 @@ func (d *DeviceDriver) ReconcileCache() error {
 			d.Cache.CurrentConfig = newMergedConfig
 
 			// update the configmap
-			if err := d.ConfigMapUpdate(StringPtr(string(d.Cache.CurrentConfig))); err != nil {
-				log.WithError(err).Error("Update configmap failed")
+			if err := d.Objects.UpdateConfigMap(d.Ctx, utils.StringPtr(string(d.Cache.CurrentConfig))); err != nil {
+				return err
 			}
+			//if err := d.ConfigMapUpdate(utils.StringPtr(string(d.Cache.CurrentConfig))); err != nil {
+			//	log.WithError(err).Error("Update configmap failed")
+			//}
 
 			// Only Update the device when the data is present
 			//if len(mergedPath) > 0 {

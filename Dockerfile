@@ -10,12 +10,12 @@ COPY go.sum go.sum
 RUN go mod download
 
 # Copy the go source
-COPY main.go main.go
-COPY ddriver/ ddriver/
-COPY pkg/ pkg/
+#COPY main.go main.go
+COPY cmd/ cmd/
+COPY internal/ internal/
 
 # Build
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build -a -o netwdevicedriver-gnmi main.go
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build -a -o ddriver ./cmd/ddcore/main.go
 
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
@@ -48,8 +48,9 @@ RUN apk --update add --no-cache openssh bash \
 RUN curl -sL https://github.com/karimra/gnmic/raw/master/install.sh | sh
 
 WORKDIR /
-COPY --from=builder /workspace/netwdevicedriver-gnmi .
+COPY --from=builder /workspace/ddriver .
 COPY templates/ca/ /templates/ca/
 USER 65532:65532
 
-ENTRYPOINT ["/netwdevicedriver-gnmi"]
+#RUN bash
+ENTRYPOINT ["/ddriver"]
