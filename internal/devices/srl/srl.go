@@ -23,6 +23,7 @@ import (
 
 	"github.com/karimra/gnmic/collector"
 	ndddvrv1 "github.com/netw-device-driver/ndd-core/apis/dvr/v1"
+	srlv1 "github.com/netw-device-driver/ndd-provider-srl/apis/srl/v1"
 	nddv1 "github.com/netw-device-driver/ndd-runtime/apis/common/v1"
 	"github.com/netw-device-driver/ndd-runtime/pkg/logging"
 	"github.com/netw-device-driver/ndd-runtime/pkg/utils"
@@ -46,7 +47,7 @@ const (
 )
 
 func init() {
-	devices.Register(nddv1.DeviceTypeSRL, func() devices.Device {
+	devices.Register(srlv1.DeviceTypeSRL, func() devices.Device {
 		return new(srl)
 	})
 }
@@ -79,7 +80,7 @@ func (d *srl) Discover(ctx context.Context) (*ndddvrv1.DeviceDetails, error) {
 	var req *gnmi.GetRequest
 	var rsp *gnmi.GetResponse
 	devDetails := &ndddvrv1.DeviceDetails{
-		Type: nddv1.DeviceTypePtr(nddv1.DeviceTypeSRL),
+		Type: nddv1.DeviceTypePtr(srlv1.DeviceTypeSRL),
 	}
 
 	p = "/system/app-management/application[name=idb_server]"

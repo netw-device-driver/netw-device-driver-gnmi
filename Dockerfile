@@ -49,7 +49,6 @@ RUN curl -sL https://github.com/karimra/gnmic/raw/master/install.sh | sh
 
 WORKDIR /
 COPY --from=builder /workspace/ddriver .
-COPY templates/ca/ /templates/ca/
 USER 65532:65532
 
 #RUN bash

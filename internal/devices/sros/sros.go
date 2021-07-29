@@ -14,14 +14,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package srl
+package sros
 
 import (
 	"context"
 
 	"github.com/karimra/gnmic/collector"
-	ndddvrv1 "github.com/netw-device-driver/ndd-core/apis/dvr/v1"
-	nddv1 "github.com/netw-device-driver/ndd-runtime/apis/common/v1"
+	ndrv1 "github.com/netw-device-driver/ndd-core/apis/dvr/v1"
+	srosv1 "github.com/netw-device-driver/ndd-provider-sros/apis/sros/v1"
 	"github.com/netw-device-driver/ndd-runtime/pkg/logging"
 	"github.com/netw-device-driver/ndd-runtime/pkg/utils"
 	"github.com/netw-device-driver/netw-device-driver-gnmi/internal/devices"
@@ -44,38 +44,38 @@ const (
 )
 
 func init() {
-	devices.Register(nddv1.DeviceTypeSROS, func() devices.Device {
-		return new(srl)
+	devices.Register(srosv1.DeviceTypeSROS, func() devices.Device {
+		return new(sros)
 	})
 }
 
-type srl struct {
+type sros struct {
 	target        *collector.Target
 	log           logging.Logger
-	deviceDetails *ndddvrv1.DeviceDetails
+	deviceDetails *ndrv1.DeviceDetails
 }
 
-func (d *srl) Init(opts ...devices.DeviceOption) error {
+func (d *sros) Init(opts ...devices.DeviceOption) error {
 	for _, o := range opts {
 		o(d)
 	}
 	return nil
 }
 
-func (s *srl) WithTarget(*collector.Target) {}
+func (s *sros) WithTarget(*collector.Target) {}
 
-func (s *srl) WithLogging(logging.Logger) {}
+func (s *sros) WithLogging(logging.Logger) {}
 
-func (d *srl) Discover(ctx context.Context) (*ndddvrv1.DeviceDetails, error) {
+func (d *sros) Discover(ctx context.Context) (*ndrv1.DeviceDetails, error) {
 	d.log.Debug("Discover SROS details ...")
-	devDetails := &ndddvrv1.DeviceDetails{}
+	devDetails := &ndrv1.DeviceDetails{}
 
 	// TODO
 
 	return devDetails, nil
 }
 
-func (d *srl) GetConfig(ctx context.Context) (map[string]interface{}, error) {
+func (d *sros) GetConfig(ctx context.Context) (map[string]interface{}, error) {
 	var err error
 	var p string
 	var req *gnmi.GetRequest
@@ -103,7 +103,7 @@ func (d *srl) GetConfig(ctx context.Context) (map[string]interface{}, error) {
 	return nil, nil
 }
 
-func (d *srl) Get(ctx context.Context, p *string) (map[string]interface{}, error) {
+func (d *sros) Get(ctx context.Context, p *string) (map[string]interface{}, error) {
 	var err error
 	var req *gnmi.GetRequest
 	var rsp *gnmi.GetResponse
@@ -130,7 +130,7 @@ func (d *srl) Get(ctx context.Context, p *string) (map[string]interface{}, error
 	return nil, nil
 }
 
-func (d *srl) Update(ctx context.Context, p *string, data []byte) (*gnmi.SetResponse, error) {
+func (d *sros) Update(ctx context.Context, p *string, data []byte) (*gnmi.SetResponse, error) {
 	req, err := gnmic.CreateSetRequest(p, data)
 	if err != nil {
 		d.log.Debug(errGnmiCreateSetRequest, "error", err)
@@ -145,7 +145,7 @@ func (d *srl) Update(ctx context.Context, p *string, data []byte) (*gnmi.SetResp
 	return resp, nil
 }
 
-func (d *srl) Delete(ctx context.Context, p *string) (*gnmi.SetResponse, error) {
+func (d *sros) Delete(ctx context.Context, p *string) (*gnmi.SetResponse, error) {
 	req, err := gnmic.CreateDeleteRequest(p)
 	if err != nil {
 		d.log.Debug(errGnmiCreateDeleteRequest, "error", err)

@@ -21,7 +21,6 @@ import (
 
 	"github.com/netw-device-driver/ndd-runtime/pkg/logging"
 	"github.com/netw-device-driver/netwdevpb"
-	log "github.com/sirupsen/logrus"
 )
 
 type Registrator struct {
@@ -44,35 +43,37 @@ func NewRegistrator(log logging.Logger, subCh chan bool) *Registrator {
 }
 
 // Request is a GRPC service that provides the cache status
-func (c *Registrator) Register(ctx context.Context, req *netwdevpb.RegistrationRequest) (*netwdevpb.RegistrationReply, error) {
-	log.Debug("Registration...")
+func (r *Registrator) Register(ctx context.Context, req *netwdevpb.RegistrationRequest) (*netwdevpb.RegistrationReply, error) {
+	r.log.WithValues("register request", req)
+	r.log.Debug("Registration...")
 
-	c.Subscriptions = req.Subscriptions
-	c.ExceptionPaths = req.ExcpetionPaths
-	c.ExplicitExceptionPaths = req.ExplicitExceptionPaths
+	r.Subscriptions = req.Subscriptions
+	r.ExceptionPaths = req.ExcpetionPaths
+	r.ExplicitExceptionPaths = req.ExplicitExceptionPaths
 
-	c.subCh <- true
+	//r.subCh <- true
 
 	reply := &netwdevpb.RegistrationReply{}
+	r.log.Debug("Registration reply...")
 	return reply, nil
 }
 
-func (c *Registrator) GetDeviceKind() string {
-	return c.DeviceKind
+func (r *Registrator) GetDeviceKind() string {
+	return r.DeviceKind
 }
 
-func (c *Registrator) GetDeviceMatch() string {
-	return c.DeviceMatch
+func (r *Registrator) GetDeviceMatch() string {
+	return r.DeviceMatch
 }
 
-func (c *Registrator) GetSubscriptions() []string {
-	return c.Subscriptions
+func (r *Registrator) GetSubscriptions() []string {
+	return r.Subscriptions
 }
 
-func (c *Registrator) GetExceptionPaths() []string {
-	return c.ExceptionPaths
+func (r *Registrator) GetExceptionPaths() []string {
+	return r.ExceptionPaths
 }
 
-func (c *Registrator) GetExplicitExceptionPaths() []string {
-	return c.ExplicitExceptionPaths
+func (r *Registrator) GetExplicitExceptionPaths() []string {
+	return r.ExplicitExceptionPaths
 }

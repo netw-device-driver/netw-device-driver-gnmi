@@ -104,14 +104,14 @@ type ResourceData struct {
 	CacheStatus netwdevpb.CacheStatusReply_CacheResourceStatus // Status of the resource
 }
 
-func NewCache(log logging.Logger) (*Cache, error) {
+func NewCache(log logging.Logger) *Cache {
 	//onChangeDeletes := make([]string, 0)
 	//onChangeUpdates := make([]string, 0)
 	//OnChangeDeviations := make(map[string]*Deviation)
 	var x1 interface{}
 	empty, err := json.Marshal(x1)
 	if err != nil {
-		return nil, err
+		return nil
 	}
 	return &Cache{
 		//NewK8sOperatorUpdates: new(bool),
@@ -125,7 +125,7 @@ func NewCache(log logging.Logger) (*Cache, error) {
 
 		CurrentConfig: empty,
 		log:           log,
-	}, nil
+	}
 }
 
 // Request is a GRPC service that provides the cache status
@@ -142,6 +142,7 @@ func (c *Cache) Request(ctx context.Context, req *netwdevpb.CacheStatusRequest) 
 		return reply, nil
 	}
 	reply.Exists = false
+	c.log.Debug("Cache Status", "reply", reply)
 	return reply, nil
 }
 

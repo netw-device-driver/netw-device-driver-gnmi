@@ -62,10 +62,12 @@ func (d *DeviceDiscoverer) Discover(ctx context.Context) (nddv1.DeviceType, erro
 
 	for _, sm := range resp.SupportedModels {
 		if strings.Contains(sm.Name, "srl_nokia") {
-			return nddv1.DeviceTypeSRL, nil
+			return "", nil
+			//return nddv1.DeviceTypeSRL, nil
 		}
 		if strings.Contains(sm.Name, "sros_nokia") {
-			return nddv1.DeviceTypeSROS, nil
+			return "", nil
+			//return nddv1.DeviceTypeSROS, nil
 		}
 	}
 	return nddv1.DeviceTypeUnknown, nil

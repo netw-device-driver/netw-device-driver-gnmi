@@ -52,21 +52,21 @@ const (
 
 // DeviceDriver contains the device driver information
 type DeviceDriver struct {
-	log                logging.Logger
-	Device             devices.Device
-	Objects            Establisher
-	Discoverer         Discoverer
-	Collector          Collector
-	CacheServerPort    *int
-	CacheServerAddress *string
-	DeviceName         *string
-	TargetConfig       *collector.TargetConfig
-	Target             *collector.Target
-	K8sClient          *client.Client
-	NetworkNodeKind    *string
-	DeviceDetails      *ndddvrv1.DeviceDetails
-	InitialConfig      map[string]interface{}
-	GrpcServer         *grpc.Server
+	log               logging.Logger
+	Device            devices.Device
+	Objects           Establisher
+	Discoverer        Discoverer
+	Collector         Collector
+	GrpcServerPort    *int
+	GrpcServerAddress *string
+	DeviceName        *string
+	TargetConfig      *collector.TargetConfig
+	Target            *collector.Target
+	K8sClient         *client.Client
+	NetworkNodeKind   *string
+	DeviceDetails     *ndddvrv1.DeviceDetails
+	InitialConfig     map[string]interface{}
+	GrpcServer        *grpc.Server
 
 	AutoPilot *bool
 	Debug     *bool
@@ -102,12 +102,12 @@ func WithEstablisher(er *APIEstablisher) Option {
 	}
 }
 
-// WithCacheServer initializes the cache server in the device driver
-func WithCacheServer(s *string) Option {
+// WithGrpcServer initializes the cache server in the device driver
+func WithGrpcServer(s *string) Option {
 	return func(d *DeviceDriver) {
-		d.CacheServerAddress = s
+		d.GrpcServerAddress = s
 		p, _ := strconv.Atoi(strings.Split(*s, ":")[1])
-		d.CacheServerPort = &p
+		d.GrpcServerPort = &p
 	}
 }
 
@@ -226,12 +226,12 @@ func WithDebug(b *bool) Option {
 // NewDeviceDriver function defines a new device driver
 func NewDeviceDriver(opts ...Option) (*DeviceDriver, error) {
 	d := &DeviceDriver{
-		CacheServerAddress: new(string),
-		DeviceName:         new(string),
-		DeviceDetails:      new(ndddvrv1.DeviceDetails),
-		TargetConfig:       new(collector.TargetConfig),
-		InitialConfig:      make(map[string]interface{}),
-		K8sClient:          new(client.Client),
+		GrpcServerAddress: new(string),
+		DeviceName:        new(string),
+		DeviceDetails:     new(ndddvrv1.DeviceDetails),
+		TargetConfig:      new(collector.TargetConfig),
+		InitialConfig:     make(map[string]interface{}),
+		K8sClient:         new(client.Client),
 
 		//SubCh:     make(chan struct{}),
 		//StopCh:    make(chan struct{}),
@@ -261,16 +261,28 @@ func NewDeviceDriver(opts ...Option) (*DeviceDriver, error) {
 	d.Registrator = NewRegistrator(d.log, d.SubCh)
 
 	// initialize the cache
-	d.Cache, err = NewCache(d.log)
+	d.Cache = NewCache(d.log)
 
 	return d, nil
+}
+
+func (d *DeviceDriver) Start() error {
+	d.log.Debug("start device driver...")
+	errChannel := make(chan error)
+	go func() {
+		if err := d.StartGrpcServer(*d.GrpcServerAddress); err != nil {
+			errChannel <- errors.Wrap(err, errStartGRPCServer)
+		}
+		errChannel <- nil
+	}()
+	return <-errChannel
 }
 
 func (d *DeviceDriver) InitGrpcServer() error {
 	d.log.Debug("init grpc server ...")
 	errChannel := make(chan error)
 	go func() {
-		if err := d.StartGrpcServer(*d.CacheServerAddress); err != nil {
+		if err := d.StartGrpcServer(*d.GrpcServerAddress); err != nil {
 			errChannel <- errors.Wrap(err, errStartGRPCServer)
 		}
 		errChannel <- nil
@@ -283,7 +295,7 @@ func (d *DeviceDriver) StartGrpcServer(s string) error {
 	d.log.Debug("starting GRPC server...")
 
 	// create a listener on a specific address:port
-	lis, err := net.Listen("tcp", s)
+	l, err := net.Listen("tcp", s)
 	if err != nil {
 		return errors.Wrap(err, errCreateTcpListener)
 	}
@@ -297,7 +309,9 @@ func (d *DeviceDriver) StartGrpcServer(s string) error {
 	netwdevpb.RegisterRegistrationServer(d.GrpcServer, d.Registrator)
 
 	// start the server
-	if err := d.GrpcServer.Serve(lis); err != nil {
+	d.log.Debug("starting GRPC server...")
+	if err := d.GrpcServer.Serve(l); err != nil {
+		d.log.Debug("Errors", "error", err)
 		return errors.Wrap(err, errGrpcServer)
 	}
 	return nil
