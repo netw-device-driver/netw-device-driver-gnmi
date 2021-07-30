@@ -27,16 +27,8 @@ import (
 type Register struct {
 	register.UnimplementedRegistrationServer
 
-	RegisteredDevices map[nddv1.DeviceType]RegistrationInfo
+	RegisteredDevices map[nddv1.DeviceType]*register.RegistrationInfo
 	log               logging.Logger
-}
-
-type RegistrationInfo struct {
-	DeviceType             string
-	MatchString            string
-	Subscriptions          []string
-	ExceptionPaths         []string
-	ExplicitExceptionPaths []string
 }
 
 // RegisterOption can be used to manipulate Options.
@@ -51,7 +43,7 @@ func WithRegisterLogger(log logging.Logger) RegisterOption {
 
 func NewRegister(opts ...RegisterOption) *Register {
 	r := &Register{
-		RegisteredDevices: make(map[nddv1.DeviceType]RegistrationInfo),
+		RegisteredDevices: make(map[nddv1.DeviceType]*register.RegistrationInfo),
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -63,13 +55,7 @@ func NewRegister(opts ...RegisterOption) *Register {
 func (r *Register) Create(ctx context.Context, req *register.RegistrationInfo) (*register.DeviceType, error) {
 	r.log.Debug("Register Create...")
 
-	r.RegisteredDevices[nddv1.DeviceType(req.DeviceType)] = RegistrationInfo{
-		DeviceType:             req.GetDeviceType(),
-		MatchString:            req.GetMatchString(),
-		Subscriptions:          req.GetExceptionPaths(),
-		ExceptionPaths:         req.GetExceptionPaths(),
-		ExplicitExceptionPaths: req.GetExplicitExceptionPaths(),
-	}
+	r.RegisteredDevices[nddv1.DeviceType(req.DeviceType)] = req
 
 	//r.subCh <- true
 
@@ -97,13 +83,7 @@ func (r *Register) Read(ctx context.Context, req *register.DeviceType) (*registe
 func (r *Register) Update(ctx context.Context, req *register.RegistrationInfo) (*register.DeviceType, error) {
 	r.log.Debug("Register Update...")
 
-	r.RegisteredDevices[nddv1.DeviceType(req.DeviceType)] = RegistrationInfo{
-		DeviceType:             req.GetDeviceType(),
-		MatchString:            req.GetMatchString(),
-		Subscriptions:          req.GetExceptionPaths(),
-		ExceptionPaths:         req.GetExceptionPaths(),
-		ExplicitExceptionPaths: req.GetExplicitExceptionPaths(),
-	}
+	r.RegisteredDevices[nddv1.DeviceType(req.DeviceType)] = req
 
 	//r.subCh <- true
 
