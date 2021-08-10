@@ -109,6 +109,7 @@ func (a *K8sApi) SetNetworkNodeStatus(ctx context.Context, dDetails *ndrv1.Devic
 	if err := a.Get(ctx, nnKey, nn); err != nil {
 		return errors.Wrap(err, errSetNetworkNodeStatus)
 	}
+	a.log.Debug("Configmap info", "DeviceDetails", dDetails, "Conditions", c)
 	nn.SetDeviceDetails(dDetails)
 	nn.SetConditions(c)
 

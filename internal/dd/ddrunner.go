@@ -17,60 +17,17 @@ limitations under the License.
 package dd
 
 import (
-	"context"
 	"fmt"
-	"strings"
 	"time"
 
-	ndrv1 "github.com/netw-device-driver/ndd-core/apis/dvr/v1"
-	nddv1 "github.com/netw-device-driver/ndd-runtime/apis/common/v1"
-	"github.com/netw-device-driver/ndd-runtime/pkg/logging"
 	"github.com/netw-device-driver/netw-device-driver-gnmi/internal/devices"
 	"github.com/netw-device-driver/netw-device-driver-gnmi/internal/jsonutils"
-	"github.com/openconfig/gnmi/proto/gnmi"
-	"github.com/pkg/errors"
 )
 
 const (
-	//timers
-	notReadyTimeout = 10 * time.Second
-	//errors
-
-	errDeviceNotRegistered   = "the device type is not registered"
-	errDeviceInitFailed      = "cannot initialize the device"
-	errDeviceDiscoveryFailed = "cannot discover device"
-	errDeviceGetConfigFailed = "cannot get device config"
-	errGetNetworkNode        = "cannot get NetworkNode"
-	errGetSecret             = "cannot get Secret"
+	// timers
+	reconcileTimer = 1 * time.Second
 )
-
-type deviceDriver struct {
-	ctx context.Context
-
-	// startup data
-	DeviceName string
-
-	// k8sapi client
-	//scheme *runtime.Scheme
-	//client client.Client
-	K8sApi *K8sApi
-
-	// gnmi client
-	Target *Target        // used to interact via gnmi to the target to get capabilities
-	Device devices.Device // handles all gnmi interaction based on the specific deviceexcept the capabilities
-
-	// grpc server
-	Server   *GrpcServer // used for registration, cache update/status reporting
-	Register *Register   // grpc service which handles registration
-	Cache    *Cache      // grpc service which handles the cache
-
-	// dynamic discovered data
-	DeviceDetails *ndrv1.DeviceDetails
-	InitialConfig map[string]interface{}
-
-	// logging
-	log logging.Logger
-}
 
 func (d *deviceDriver) Run() error {
 
@@ -165,70 +122,51 @@ func (d *deviceDriver) Run() error {
 		}
 	}
 
-	d.log.Debug("ready for more")
+	d.log.Debug("Device is discovered")
 
+	d.StopCh = make(chan struct{})
+	defer close(d.StopCh)
+
+	// start reconcile process
+	go func() {
+		d.StartReconcileProcess()
+	}()
+
+	select {
+	case <-d.ctx.Done():
+		d.log.Debug("context cancelled")
+	}
+	close(d.StopCh)
+
+	return nil
+
+}
+
+func (d *deviceDriver) StartReconcileProcess() error {
+	d.log.Debug("Starting reconciliation process...")
+	timeout := make(chan bool, 1)
+	timeout <- true
+	d.Cache.SetNewProviderUpdates(true)
 	for {
-	}
+		select {
+		case <-timeout:
+			time.Sleep(reconcileTimer)
+			timeout <- true
 
-	//return nil
-}
+			// reconcile cache when:
+			// -> new updates from k8s operator are received
+			// -> autopilot is on and new onChange information was reveived that requires device updates
+			// -> autopilot is on and new onChange information was received that requires to repply the cache
 
-// getDeviceType returns the devicetype using the registered data from the provider
-func (d *deviceDriver) getDeviceType(gnmiCap []*gnmi.ModelData) nddv1.DeviceType {
-	for _, sm := range gnmiCap {
-		for match, devicType := range d.Register.GetDeviceMatches() {
-			d.log.Debug("Device info", "match", match, "deviceType", devicType, "sm.Name", sm.Name)
-			if strings.Contains(sm.Name, match) {
-				return devicType
+			if d.Cache.GetNewProviderUpdates() {
+				d.Cache.Reconcile(d.ctx, d.Device)
+			} else {
+				fmt.Printf(".")
 			}
+
+		case <-d.StopCh:
+			d.log.Debug("Stopping timer reconciliation process")
+			return nil
 		}
-	}
-	return nddv1.DeviceTypeUnknown
-}
-
-func (d *deviceDriver) Ready() error {
-	d.DeviceDetails = d.initDeviceDetails()
-	if err := d.K8sApi.SetNetworkNodeStatus(d.ctx, d.DeviceDetails, ndrv1.Discovered()); err != nil {
-		d.log.Debug(errSetNetworkNodeStatus, "error", err)
-		return errors.Wrap(err, errSetNetworkNodeStatus)
-	}
-	return nil
-}
-
-func (d *deviceDriver) NotReady(msg string) error {
-	d.DeviceDetails = d.initDeviceDetails()
-	if err := d.K8sApi.SetNetworkNodeStatus(d.ctx, d.DeviceDetails, ndrv1.NotDiscovered()); err != nil {
-		d.log.Debug(errSetNetworkNodeStatus, "error", err)
-		return errors.Wrap(err, errSetNetworkNodeStatus)
-	}
-	d.log.Debug(msg)
-	return nil
-}
-
-func (d *deviceDriver) Configured() error {
-	d.DeviceDetails = d.initDeviceDetails()
-	if err := d.K8sApi.SetNetworkNodeStatus(d.ctx, d.DeviceDetails, ndrv1.Configured()); err != nil {
-		d.log.Debug(errSetNetworkNodeStatus, "error", err)
-		return errors.Wrap(err, errSetNetworkNodeStatus)
-	}
-	return nil
-}
-
-func (d *deviceDriver) NotConfigured(s string) error {
-	d.DeviceDetails = d.initDeviceDetails()
-	if err := d.K8sApi.SetNetworkNodeStatus(d.ctx, d.DeviceDetails, ndrv1.NotConfigured()); err != nil {
-		d.log.Debug(errSetNetworkNodeStatus, "error", err)
-		return errors.Wrap(err, errSetNetworkNodeStatus)
-	}
-	return nil
-}
-
-func (d *deviceDriver) initDeviceDetails() *ndrv1.DeviceDetails {
-	return &ndrv1.DeviceDetails{
-		HostName:     &d.DeviceName,
-		Kind:         new(string),
-		SwVersion:    new(string),
-		MacAddress:   new(string),
-		SerialNumber: new(string),
 	}
 }

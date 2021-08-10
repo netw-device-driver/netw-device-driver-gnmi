@@ -20,6 +20,7 @@ import (
 	"context"
 	"net"
 
+	config "github.com/netw-device-driver/ndd-grpc/config/configpb"
 	register "github.com/netw-device-driver/ndd-grpc/register/registerpb"
 	"github.com/netw-device-driver/ndd-runtime/pkg/logging"
 	"github.com/pkg/errors"
@@ -93,9 +94,8 @@ func (s *GrpcServer) Start(r *Register, c *Cache) error {
 	grpcServer := grpc.NewServer()
 
 	// attach the gRPC service to the server
-	//netwdevpb.RegisterCacheStatusServer(grpcServer, c)
-	//netwdevpb.RegisterCacheUpdateServer(grpcServer, c)
 	register.RegisterRegistrationServer(grpcServer, r)
+	config.RegisterConfigurationServer(grpcServer, c)
 
 	// start the server
 	s.log.Debug("grpc server serve...")

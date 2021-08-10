@@ -27,7 +27,7 @@ import (
 type Register struct {
 	register.UnimplementedRegistrationServer
 
-	RegisteredDevices map[nddv1.DeviceType]*register.RegistrationInfo
+	RegisteredDevices map[nddv1.DeviceType]*register.Request
 	log               logging.Logger
 }
 
@@ -43,7 +43,7 @@ func WithRegisterLogger(log logging.Logger) RegisterOption {
 
 func NewRegister(opts ...RegisterOption) *Register {
 	r := &Register{
-		RegisteredDevices: make(map[nddv1.DeviceType]*register.RegistrationInfo),
+		RegisteredDevices: make(map[nddv1.DeviceType]*register.Request),
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -52,24 +52,21 @@ func NewRegister(opts ...RegisterOption) *Register {
 	return r
 }
 
-func (r *Register) Create(ctx context.Context, req *register.RegistrationInfo) (*register.DeviceType, error) {
+func (r *Register) Create(ctx context.Context, req *register.Request) (*register.Reply, error) {
 	r.log.Debug("Register Create...")
 
 	r.RegisteredDevices[nddv1.DeviceType(req.DeviceType)] = req
 
 	//r.subCh <- true
 
-	reply := &register.DeviceType{
-		DeviceType: req.GetDeviceType(),
-	}
 	r.log.Debug("Register Create reply...")
-	return reply, nil
+	return &register.Reply{}, nil
 }
 
-func (r *Register) Read(ctx context.Context, req *register.DeviceType) (*register.RegistrationInfo, error) {
+func (r *Register) Get(ctx context.Context, req *register.DeviceType) (*register.Status, error) {
 	r.log.Debug("Register Read...")
 
-	reply := &register.RegistrationInfo{}
+	reply := &register.Status{}
 
 	// check if the device type was registered
 	if _, ok := r.RegisteredDevices[nddv1.DeviceType(req.GetDeviceType())]; ok {
@@ -80,33 +77,27 @@ func (r *Register) Read(ctx context.Context, req *register.DeviceType) (*registe
 	return reply, nil
 }
 
-func (r *Register) Update(ctx context.Context, req *register.RegistrationInfo) (*register.DeviceType, error) {
+func (r *Register) Update(ctx context.Context, req *register.Request) (*register.Reply, error) {
 	r.log.Debug("Register Update...")
 
 	r.RegisteredDevices[nddv1.DeviceType(req.DeviceType)] = req
 
 	//r.subCh <- true
 
-	reply := &register.DeviceType{
-		DeviceType: req.GetDeviceType(),
-	}
 	r.log.Debug("Register Update reply...")
-	return reply, nil
+	return &register.Reply{}, nil
 }
 
 // DeRegister is a GRPC service that deregisters the device type
-func (r *Register) Delete(ctx context.Context, req *register.DeviceType) (*register.DeviceType, error) {
+func (r *Register) Delete(ctx context.Context, req *register.DeviceType) (*register.Reply, error) {
 	r.log.Debug("Registration Delete...")
 
 	delete(r.RegisteredDevices, nddv1.DeviceType(req.GetDeviceType()))
 
 	//r.subCh <- true
 
-	reply := &register.DeviceType{
-		DeviceType: req.GetDeviceType(),
-	}
 	r.log.Debug("Registration Delete reply...")
-	return reply, nil
+	return &register.Reply{}, nil
 }
 
 // GetDeviceTypes returns all devicetypes that are registered

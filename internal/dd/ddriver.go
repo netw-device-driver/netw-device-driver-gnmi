@@ -175,6 +175,7 @@ func NewDeviceDriver(config *rest.Config, opts ...Option) (*deviceDriver, error)
 		//client:        c,
 		K8sApi:        k8sApi,
 		DeviceName:    options.DeviceName,
+		AutoPilot:     options.AutoPilot,
 		DeviceDetails: new(ndrv1.DeviceDetails),
 		Server: NewGrpcServer(
 			WithServerLogger(options.log),

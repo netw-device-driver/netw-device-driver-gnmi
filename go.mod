@@ -3,13 +3,14 @@ module github.com/netw-device-driver/netw-device-driver-gnmi
 go 1.16
 
 require (
+	github.com/evanphx/json-patch v4.11.0+incompatible
 	github.com/google/go-cmp v0.5.6
 	github.com/karimra/gnmic v0.17.1
 	github.com/netw-device-driver/ndd-core v0.1.8
-	github.com/netw-device-driver/ndd-grpc v0.1.3
-	github.com/netw-device-driver/ndd-provider-srl v0.1.1
-	github.com/netw-device-driver/ndd-provider-sros v0.1.0
-	github.com/netw-device-driver/ndd-runtime v0.3.75
+	github.com/netw-device-driver/ndd-grpc v0.1.18
+	github.com/netw-device-driver/ndd-provider-srl v0.1.3
+	github.com/netw-device-driver/ndd-provider-sros v0.1.1
+	github.com/netw-device-driver/ndd-runtime v0.3.78
 	github.com/netw-device-driver/netwdevpb v0.1.27
 	github.com/openconfig/gnmi v0.0.0-20210707145734-c69a5df04b53
 	github.com/pkg/errors v0.9.1
