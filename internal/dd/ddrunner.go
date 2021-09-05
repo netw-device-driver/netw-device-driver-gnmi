@@ -21,17 +21,17 @@ import (
 	"time"
 
 	"github.com/netw-device-driver/netw-device-driver-gnmi/internal/devices"
-	"github.com/netw-device-driver/netw-device-driver-gnmi/internal/jsonutils"
 )
 
 const (
 	// timers
-	reconcileTimer = 1 * time.Second
+	reconcileTimer          = 1 * time.Second
+	subscriptionStartTimput = 1 * time.Second
 )
 
 func (d *deviceDriver) Run() error {
 
-	if err := d.Server.Run(d.ctx, d.Register, d.Cache); err != nil {
+	if err := d.Server.Run(d.ctx); err != nil {
 		return err
 	}
 	// set the network node condition to configured
@@ -73,6 +73,9 @@ func (d *deviceDriver) Run() error {
 				time.Sleep(notReadyTimeout)
 				continue
 			}
+			d.DeviceType = deviceType
+			// dont like it but maybe this is the easiest way
+			d.Server.Cache.Device = d.Device
 
 			// get device details through gnmi
 			d.DeviceDetails, err = d.Device.Discover(d.ctx)
@@ -97,7 +100,7 @@ func (d *deviceDriver) Run() error {
 
 			// clean config and provide a string ptr to map in the configmap
 			var cfgStringptr *string
-			d.InitialConfig, cfgStringptr, err = jsonutils.CleanConfig2String(d.InitialConfig)
+			d.Server.Cache.CurrentConfig, cfgStringptr, err = d.Server.Cache.parser.CleanConfig2String(d.InitialConfig)
 			if err != nil {
 				d.log.Debug("CleanConfig2String", "error", err)
 			}
@@ -118,6 +121,8 @@ func (d *deviceDriver) Run() error {
 				time.Sleep(notReadyTimeout)
 				continue
 			}
+			// set the cache in ready state
+			d.Server.Cache.Ready()
 			break
 		}
 	}
@@ -130,6 +135,11 @@ func (d *deviceDriver) Run() error {
 	// start reconcile process
 	go func() {
 		d.StartReconcileProcess()
+	}()
+
+	// start gnmi subscription handler
+	go func() {
+		d.StartGnmiSubscriptionHandler()
 	}()
 
 	select {
@@ -146,7 +156,7 @@ func (d *deviceDriver) StartReconcileProcess() error {
 	d.log.Debug("Starting reconciliation process...")
 	timeout := make(chan bool, 1)
 	timeout <- true
-	d.Cache.SetNewProviderUpdates(true)
+	d.Server.Cache.SetNewProviderUpdates(true)
 	for {
 		select {
 		case <-timeout:
@@ -155,18 +165,40 @@ func (d *deviceDriver) StartReconcileProcess() error {
 
 			// reconcile cache when:
 			// -> new updates from k8s operator are received
-			// -> autopilot is on and new onChange information was reveived that requires device updates
-			// -> autopilot is on and new onChange information was received that requires to repply the cache
-
-			if d.Cache.GetNewProviderUpdates() {
-				d.Cache.Reconcile(d.ctx, d.Device)
-			} else {
-				fmt.Printf(".")
+			if d.Server.Cache.GetNewProviderUpdates() {
+				d.Server.Cache.Reconcile(d.ctx, d.Device)
 			}
+			// else dont do anything since we need to wait for an update
 
 		case <-d.StopCh:
 			d.log.Debug("Stopping timer reconciliation process")
 			return nil
+		}
+	}
+}
+
+func (d *deviceDriver) StartGnmiSubscriptionHandler() {
+	time.Sleep(subscriptionStartTimput)
+	d.log.Debug("Starting cache GNMI subscription...")
+
+	d.Collector.Lock()
+	go d.Collector.StartSubscription(d.ctx, "ConfigChangesubscription", d.Server.Cache.GetSubscriptions(d.DeviceType))
+	d.Collector.Unlock()
+
+	chanSubResp, chanSubErr := d.Target.target.ReadSubscriptions()
+
+	for {
+		select {
+		case resp := <-chanSubResp:
+			//log.Infof("SubRsp Response %v", resp)
+			// TODO error handling
+			d.Server.Cache.ReconcileOnChange(resp.Response)
+		case tErr := <-chanSubErr:
+			d.log.Debug("subscribe", "error", tErr)
+			time.Sleep(60 * time.Second)
+		case <-d.StopCh:
+			d.log.Debug("Stopping subscription process...")
+			return
 		}
 	}
 }

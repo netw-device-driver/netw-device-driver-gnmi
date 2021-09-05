@@ -39,22 +39,22 @@ type GrpcServer struct {
 }
 
 // Option can be used to manipulate Options.
-type ServerOption func(*GrpcServer)
+type GrpcServerOption func(*GrpcServer)
 
 // WithLogger specifies how the Reconciler should log messages.
-func WithServerLogger(log logging.Logger) ServerOption {
+func WithGrpcServerLogger(log logging.Logger) GrpcServerOption {
 	return func(o *GrpcServer) {
 		o.log = log
 	}
 }
 
-func WithGrpcServerAddress(a string) ServerOption {
+func WithGrpcServerAddress(a string) GrpcServerOption {
 	return func(o *GrpcServer) {
 		o.grpcServerAddress = a
 	}
 }
 
-func NewGrpcServer(opts ...ServerOption) *GrpcServer {
+func NewGrpcServer(opts ...GrpcServerOption) *GrpcServer {
 	s := &GrpcServer{}
 	for _, opt := range opts {
 		opt(s)
@@ -96,6 +96,8 @@ func (s *GrpcServer) Start(r *Register, c *Cache) error {
 	// attach the gRPC service to the server
 	register.RegisterRegistrationServer(grpcServer, r)
 	config.RegisterConfigurationServer(grpcServer, c)
+
+	//gnmi server
 
 	// start the server
 	s.log.Debug("grpc server serve...")

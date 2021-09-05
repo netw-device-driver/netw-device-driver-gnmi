@@ -18,5 +18,5 @@ package all
 
 import (
 	_ "github.com/netw-device-driver/netw-device-driver-gnmi/internal/devices/srl"
-	_ "github.com/netw-device-driver/netw-device-driver-gnmi/internal/devices/sros"
+	//_ "github.com/netw-device-driver/netw-device-driver-gnmi/internal/devices/sros"
 )

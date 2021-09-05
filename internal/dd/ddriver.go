@@ -20,7 +20,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/karimra/gnmic/collector"
+	"github.com/karimra/gnmic/target"
+	"github.com/karimra/gnmic/types"
 	ndrv1 "github.com/netw-device-driver/ndd-core/apis/dvr/v1"
 	"google.golang.org/grpc"
 
@@ -44,15 +45,15 @@ const (
 )
 
 type Options struct {
-	Scheme *runtime.Scheme
+	Scheme       *runtime.Scheme
+	ServerConfig Config
 
 	Namespace         string
 	DeviceName        string
-	TargetConfig      *collector.TargetConfig
-	Target            *collector.Target
+	TargetConfig      *types.TargetConfig
+	Target            *target.Target
 	CredName          string
 	GrpcServerAddress string
-	AutoPilot         bool
 
 	log   logging.Logger
 	Debug bool
@@ -93,13 +94,6 @@ func WithDeviceName(n *string) Option {
 func WithGrpcServer(s *string) Option {
 	return func(o *Options) {
 		o.GrpcServerAddress = *s
-	}
-}
-
-// WithAutoPilot initializes the device mode of operation
-func WithAutoPilot(b *bool) Option {
-	return func(o *Options) {
-		o.AutoPilot = *b
 	}
 }
 
@@ -151,7 +145,7 @@ func NewDeviceDriver(config *rest.Config, opts ...Option) (*deviceDriver, error)
 	if err != nil {
 		return nil, err
 	}
-	options.TargetConfig = &collector.TargetConfig{
+	options.TargetConfig = &types.TargetConfig{
 		Name:       options.DeviceName,
 		Address:    nn.GetTargetAddress(),
 		Username:   u,
@@ -164,9 +158,14 @@ func NewDeviceDriver(config *rest.Config, opts ...Option) (*deviceDriver, error)
 		TLSKey:     utils.StringPtr(""), //TODO TLS
 		Gzip:       utils.BoolPtr(false),
 	}
-	options.Target = collector.NewTarget(options.TargetConfig)
+	options.Target = target.NewTarget(options.TargetConfig)
 	if err := options.Target.CreateGNMIClient(ctx, grpc.WithBlock()); err != nil { // TODO add dialopts
 		return nil, errors.Wrap(err, errCreateGnmiClient)
+	}
+
+	options.ServerConfig = Config{
+		GrpcServerAddress: options.GrpcServerAddress,
+		SkipVerify:        true,
 	}
 
 	return &deviceDriver{
@@ -175,21 +174,25 @@ func NewDeviceDriver(config *rest.Config, opts ...Option) (*deviceDriver, error)
 		//client:        c,
 		K8sApi:        k8sApi,
 		DeviceName:    options.DeviceName,
-		AutoPilot:     options.AutoPilot,
 		DeviceDetails: new(ndrv1.DeviceDetails),
-		Server: NewGrpcServer(
+		Server: NewServer(options.DeviceName,
 			WithServerLogger(options.log),
-			WithGrpcServerAddress(options.GrpcServerAddress),
+			WithServerConfig(options.ServerConfig),
 		),
-		Register: NewRegister(
-			WithRegisterLogger(options.log),
-		),
-		Cache: NewCache(
-			WithCacheLogger(options.log),
-		),
+		//Register: NewRegister(
+		//	WithRegisterLogger(options.log),
+		//),
+		//Cache: NewCache(
+		//	WithCacheLogger(options.log),
+		//	WithParser(options.log),
+		//	WithK8sClient(c),
+		//),
 		Target: NewTarget(options.Target,
 			WithTargetLogger(options.log),
 			WithTargetConfig(options.TargetConfig),
+		),
+		Collector: NewDeviceCollector(options.Target,
+			WithDeviceCollectorLogger(options.log),
 		),
 		log: options.log,
 	}, nil

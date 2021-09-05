@@ -48,26 +48,27 @@ type deviceDriver struct {
 	// startup data
 	DeviceName string
 
+	// runtime data
+	DeviceType nddv1.DeviceType
+
 	// k8sapi client
 	//scheme *runtime.Scheme
 	//client client.Client
 	K8sApi *K8sApi
 
 	// gnmi client
-	Target *Target        // used to interact via gnmi to the target to get capabilities
-	Device devices.Device // handles all gnmi interaction based on the specific deviceexcept the capabilities
+	Target    *Target          // used to interact via gnmi to the target to get capabilities
+	Device    devices.Device   // handles all gnmi interaction based on the specific deviceexcept the capabilities
+	Collector *DeviceCollector // handles the gnmi subscriptions
 
 	// grpc server
-	Server   *GrpcServer // used for registration, cache update/status reporting
-	Register *Register   // grpc service which handles registration
-	Cache    *Cache      // grpc service which handles the cache
+	Server *Server // used for registration, cache update/status reporting
+	//Register *Register // grpc service which handles registration
+	//Cache    *Cache    // grpc service which handles the cache
 
 	// dynamic discovered data
 	DeviceDetails *ndrv1.DeviceDetails
 	InitialConfig map[string]interface{}
-
-	// AutoPilot
-	AutoPilot bool
 
 	// logging
 	log logging.Logger
@@ -79,7 +80,7 @@ type deviceDriver struct {
 // getDeviceType returns the devicetype using the registered data from the provider
 func (d *deviceDriver) getDeviceType(gnmiCap []*gnmi.ModelData) nddv1.DeviceType {
 	for _, sm := range gnmiCap {
-		for match, devicType := range d.Register.GetDeviceMatches() {
+		for match, devicType := range d.Server.Cache.GetDeviceMatches() {
 			d.log.Debug("Device info", "match", match, "deviceType", devicType, "sm.Name", sm.Name)
 			if strings.Contains(sm.Name, match) {
 				return devicType
@@ -134,8 +135,4 @@ func (d *deviceDriver) initDeviceDetails() *ndrv1.DeviceDetails {
 		MacAddress:   new(string),
 		SerialNumber: new(string),
 	}
-}
-
-func (d *deviceDriver) GetAutoPilot() bool {
-	return d.AutoPilot
 }

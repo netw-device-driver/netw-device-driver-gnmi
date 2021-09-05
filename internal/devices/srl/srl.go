@@ -17,13 +17,15 @@ limitations under the License.
 package srl
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
 
-	"github.com/karimra/gnmic/collector"
+	"github.com/karimra/gnmic/target"
+	gutils "github.com/karimra/gnmic/utils"
 	ndddvrv1 "github.com/netw-device-driver/ndd-core/apis/dvr/v1"
-	srlv1 "github.com/netw-device-driver/ndd-provider-srl/apis/srl/v1"
+	config "github.com/netw-device-driver/ndd-grpc/config/configpb"
 	nddv1 "github.com/netw-device-driver/ndd-runtime/apis/common/v1"
 	"github.com/netw-device-driver/ndd-runtime/pkg/logging"
 	"github.com/netw-device-driver/ndd-runtime/pkg/utils"
@@ -31,12 +33,14 @@ import (
 	"github.com/netw-device-driver/netw-device-driver-gnmi/internal/gnmic"
 	"github.com/openconfig/gnmi/proto/gnmi"
 	"github.com/pkg/errors"
+	srlv1 "github.com/yndd/ndd-provider-srl/apis/srl/v1"
+	"github.com/yndd/ndd-yang/pkg/parser"
 )
 
 const (
-	state    = "STATE"
-	config   = "CONFIG"
-	encoding = "JSON_IETF"
+	State         = "STATE"
+	Configuration = "CONFIG"
+	encoding      = "JSON_IETF"
 	//errors
 	errGnmiCreateGetRequest    = "gnmi create get request error"
 	errGnmiGet                 = "gnmi get error "
@@ -53,8 +57,9 @@ func init() {
 }
 
 type srl struct {
-	target        *collector.Target
+	target        *target.Target
 	log           logging.Logger
+	parser        *parser.Parser
 	deviceDetails *ndddvrv1.DeviceDetails
 }
 
@@ -65,12 +70,16 @@ func (d *srl) Init(opts ...devices.DeviceOption) error {
 	return nil
 }
 
-func (d *srl) WithTarget(target *collector.Target) {
+func (d *srl) WithTarget(target *target.Target) {
 	d.target = target
 }
 
 func (d *srl) WithLogging(log logging.Logger) {
 	d.log = log
+}
+
+func (d *srl) WithParser(log logging.Logger) {
+	d.parser = parser.NewParser(parser.WithLogger((log)))
 }
 
 func (d *srl) Discover(ctx context.Context) (*ndddvrv1.DeviceDetails, error) {
@@ -84,7 +93,7 @@ func (d *srl) Discover(ctx context.Context) (*ndddvrv1.DeviceDetails, error) {
 	}
 
 	p = "/system/app-management/application[name=idb_server]"
-	req, err = gnmic.CreateGetRequest(&p, utils.StringPtr(state), utils.StringPtr(encoding))
+	req, err = gnmic.CreateGetRequest(&p, utils.StringPtr(State), utils.StringPtr(encoding))
 	if err != nil {
 		d.log.Debug(errGnmiCreateGetRequest, "error", err)
 		return nil, errors.Wrap(err, errGnmiCreateGetRequest)
@@ -117,7 +126,7 @@ func (d *srl) Discover(ctx context.Context) (*ndddvrv1.DeviceDetails, error) {
 	d.log.Debug("Device details", "sw version", devDetails.SwVersion)
 
 	p = "/platform/chassis"
-	req, err = gnmic.CreateGetRequest(&p, utils.StringPtr(state), utils.StringPtr(encoding))
+	req, err = gnmic.CreateGetRequest(&p, utils.StringPtr(State), utils.StringPtr(encoding))
 	if err != nil {
 		d.log.Debug(errGnmiCreateGetRequest, "error", err)
 		return nil, errors.Wrap(err, errGnmiCreateGetRequest)
@@ -167,7 +176,7 @@ func (d *srl) GetConfig(ctx context.Context) (map[string]interface{}, error) {
 	var rsp *gnmi.GetResponse
 
 	p = "/"
-	req, err = gnmic.CreateGetRequest(&p, utils.StringPtr("CONFIG"), utils.StringPtr("JSON_IETF"))
+	req, err = gnmic.CreateGetRequest(&p, utils.StringPtr(Configuration), utils.StringPtr("JSON_IETF"))
 	if err != nil {
 		d.log.Debug(errGnmiCreateGetRequest, "error", err)
 		return nil, errors.Wrap(err, errGnmiCreateGetRequest)
@@ -216,12 +225,58 @@ func (d *srl) Get(ctx context.Context, p *string) (map[string]interface{}, error
 	return nil, nil
 }
 
-func (d *srl) Update(ctx context.Context, p *string, data []byte) (*gnmi.SetResponse, error) {
-	req, err := gnmic.CreateSetRequest(p, data)
+func (d *srl) GetGnmi(ctx context.Context, p []*gnmi.Path) (map[string]interface{}, error) {
+	var err error
+	var req *gnmi.GetRequest
+	var rsp *gnmi.GetResponse
+
+	req, err = gnmic.CreateConfigGetRequest(p, utils.StringPtr("CONFIG"), utils.StringPtr("JSON_IETF"))
 	if err != nil {
-		d.log.Debug(errGnmiCreateSetRequest, "error", err)
-		return nil, errors.Wrap(err, errGnmiCreateSetRequest)
+		d.log.Debug(errGnmiCreateGetRequest, "error", err)
+		return nil, errors.Wrap(err, errGnmiCreateGetRequest)
 	}
+	rsp, err = d.target.Get(ctx, req)
+	if err != nil {
+		d.log.Debug(errGnmiGet, "error", err)
+		return nil, errors.Wrap(err, errGnmiGet)
+	}
+	u, err := gnmic.HandleGetResponse(rsp)
+	if err != nil {
+		d.log.Debug(errGnmiHandleGetResponse, "error", err)
+		return nil, errors.Wrap(err, errGnmiHandleGetResponse)
+	}
+	for _, update := range u {
+		d.log.Debug("GetConfig", "response", update)
+		return update.Values, nil
+	}
+	return nil, nil
+}
+
+func (d *srl) Update(ctx context.Context, u []*config.Update) (*gnmi.SetResponse, error) {
+
+	gnmiPrefix, err := gutils.CreatePrefix("", "")
+	if err != nil {
+		d.log.Debug(errGnmiSet, "error", err)
+		return nil, errors.Wrap(err, "prefix parse error")
+	}
+
+	updates := make([]*gnmi.Update, 0)
+	for _, upd := range u {
+		updates = append(updates, &gnmi.Update{
+			Path: d.parser.ConfigPath2GnmiPath(upd.Path),
+			Val: &gnmi.TypedValue{
+				Value: &gnmi.TypedValue_JsonIetfVal{
+					JsonIetfVal: bytes.Trim(upd.Value, " \r\n\t"),
+				},
+			},
+		})
+	}
+
+	req := &gnmi.SetRequest{
+		Prefix: gnmiPrefix,
+		Update: updates,
+	}
+
 	resp, err := d.target.Set(ctx, req)
 	if err != nil {
 		d.log.Debug(errGnmiSet, "error", err)
@@ -231,12 +286,134 @@ func (d *srl) Update(ctx context.Context, p *string, data []byte) (*gnmi.SetResp
 	return resp, nil
 }
 
-func (d *srl) Delete(ctx context.Context, p *string) (*gnmi.SetResponse, error) {
-	req, err := gnmic.CreateDeleteRequest(p)
+func (d *srl) UpdateGnmi(ctx context.Context, u []*gnmi.Update) (*gnmi.SetResponse, error) {
+
+	gnmiPrefix, err := gutils.CreatePrefix("", "")
 	if err != nil {
-		d.log.Debug(errGnmiCreateDeleteRequest, "error", err)
-		return nil, errors.Wrap(err, errGnmiCreateDeleteRequest)
+		d.log.Debug(errGnmiSet, "error", err)
+		return nil, errors.Wrap(err, "prefix parse error")
 	}
+
+	req := &gnmi.SetRequest{
+		Prefix: gnmiPrefix,
+		Update: u,
+	}
+
+	resp, err := d.target.Set(ctx, req)
+	if err != nil {
+		d.log.Debug(errGnmiSet, "error", err)
+		return nil, errors.Wrap(err, errGnmiSet)
+	}
+	d.log.Debug("response:", "resp", resp)
+	return resp, nil
+}
+
+func (d *srl) Delete(ctx context.Context, p []*config.Path) (*gnmi.SetResponse, error) {
+
+	gnmiPrefix, err := gutils.CreatePrefix("", "")
+	if err != nil {
+		d.log.Debug(errGnmiSet, "error", err)
+		return nil, errors.Wrap(err, "prefix parse error")
+	}
+
+	deletes := make([]*gnmi.Path, 0)
+	for _, del := range p {
+		dp := d.parser.ConfigPath2GnmiPath(del)
+		deletes = append(deletes, dp)
+	}
+
+	req := &gnmi.SetRequest{
+		Prefix: gnmiPrefix,
+		Delete: deletes,
+	}
+
+	resp, err := d.target.Set(ctx, req)
+	if err != nil {
+		d.log.Debug(errGnmiSet, "error", err)
+		return nil, errors.Wrap(err, errGnmiSet)
+	}
+	d.log.Debug("response:", "resp", resp)
+
+	return resp, nil
+}
+
+func (d *srl) DeleteGnmi(ctx context.Context, p []*gnmi.Path) (*gnmi.SetResponse, error) {
+	gnmiPrefix, err := gutils.CreatePrefix("", "")
+	if err != nil {
+		d.log.Debug(errGnmiSet, "error", err)
+		return nil, errors.Wrap(err, "prefix parse error")
+	}
+
+	req := &gnmi.SetRequest{
+		Prefix: gnmiPrefix,
+		Delete: p,
+	}
+
+	resp, err := d.target.Set(ctx, req)
+	if err != nil {
+		d.log.Debug(errGnmiSet, "error", err)
+		return nil, errors.Wrap(err, errGnmiSet)
+	}
+	d.log.Debug("response:", "resp", resp)
+
+	return resp, nil
+}
+
+func (d *srl) Set(ctx context.Context, u []*config.Update, p []*config.Path) (*gnmi.SetResponse, error) {
+
+	gnmiPrefix, err := gutils.CreatePrefix("", "")
+	if err != nil {
+		d.log.Debug(errGnmiSet, "error", err)
+		return nil, errors.Wrap(err, "prefix parse error")
+	}
+
+	deletes := make([]*gnmi.Path, 0)
+	for _, del := range p {
+		dp := d.parser.ConfigPath2GnmiPath(del)
+		deletes = append(deletes, dp)
+	}
+
+	updates := make([]*gnmi.Update, 0)
+	for _, upd := range u {
+		updates = append(updates, &gnmi.Update{
+			Path: d.parser.ConfigPath2GnmiPath(upd.Path),
+			Val: &gnmi.TypedValue{
+				Value: &gnmi.TypedValue_JsonIetfVal{
+					JsonIetfVal: bytes.Trim(upd.Value, " \r\n\t"),
+				},
+			},
+		})
+	}
+
+	req := &gnmi.SetRequest{
+		Prefix: gnmiPrefix,
+		Update: updates,
+		Delete: deletes,
+	}
+
+	resp, err := d.target.Set(ctx, req)
+	if err != nil {
+		d.log.Debug(errGnmiSet, "error", err)
+		return nil, errors.Wrap(err, errGnmiSet)
+	}
+	d.log.Debug("response:", "resp", resp)
+	return resp, nil
+}
+
+func (d *srl) SetGnmi(ctx context.Context, u []*gnmi.Update, p []*gnmi.Path) (*gnmi.SetResponse, error) {
+
+	gnmiPrefix, err := gutils.CreatePrefix("", "")
+	if err != nil {
+		d.log.Debug(errGnmiSet, "error", err)
+		return nil, errors.Wrap(err, "prefix parse error")
+	}
+
+	req := &gnmi.SetRequest{
+		Prefix: gnmiPrefix,
+		Update: u,
+		Delete: p,
+	}
+
 	resp, err := d.target.Set(ctx, req)
 	if err != nil {
 		d.log.Debug(errGnmiSet, "error", err)

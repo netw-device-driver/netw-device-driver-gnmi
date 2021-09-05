@@ -30,7 +30,6 @@ import (
 var (
 	grpcServerAddress string
 	deviceName        string
-	autoPilot         bool
 	namespace         string
 )
 
@@ -49,7 +48,8 @@ var startCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		zlog := zap.New(zap.UseDevMode(debug), zap.JSONEncoder())
 		log := logging.NewLogrLogger(zlog.WithName("ddgnmi"))
-		log.WithValues("deviceName", deviceName, "grpcServerAddress", grpcServerAddress, "autoPilot", autoPilot)
+		log.WithValues("deviceName", deviceName, "grpcServerAddress", grpcServerAddress)
+
 		log.Debug("started gnmi device driver")
 
 		opts := []dd.Option{
@@ -58,7 +58,6 @@ var startCmd = &cobra.Command{
 			dd.WithScheme(scheme),
 			dd.WithLogger(log.WithValues("deviceDriver", deviceName)),
 			dd.WithGrpcServer(&grpcServerAddress),
-			dd.WithAutoPilot(&autoPilot),
 			dd.WithDebug(&debug),
 		}
 		d, err := dd.NewDeviceDriver(config.GetConfigOrDie(), opts...)
@@ -78,7 +77,5 @@ func init() {
 	rootCmd.AddCommand(startCmd)
 	startCmd.Flags().StringVarP(&grpcServerAddress, "grpc-server-address", "s", os.Getenv("POD_IP"), "The address of the grpc server binds to.")
 	startCmd.Flags().StringVarP(&deviceName, "device-name", "n", "", "Name of the device the device driver serves")
-	startCmd.Flags().BoolVarP(&autoPilot, "auto-pilot", "a", true,
-		"Apply delta/diff changes to the config automatically when set to true, if set to false the device driver will report the delta and the operator should intervene what to do with the delta/diffs")
 	startCmd.Flags().StringVarP(&namespace, "namespace", "", "", "Namespace the configuration is deployed on")
 }

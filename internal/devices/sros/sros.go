@@ -16,11 +16,14 @@ limitations under the License.
 
 package sros
 
+/*
 import (
+	"bytes"
 	"context"
 
 	"github.com/karimra/gnmic/collector"
 	ndrv1 "github.com/netw-device-driver/ndd-core/apis/dvr/v1"
+	config "github.com/netw-device-driver/ndd-grpc/config/configpb"
 	srosv1 "github.com/netw-device-driver/ndd-provider-sros/apis/sros/v1"
 	"github.com/netw-device-driver/ndd-runtime/pkg/logging"
 	"github.com/netw-device-driver/ndd-runtime/pkg/utils"
@@ -28,12 +31,13 @@ import (
 	"github.com/netw-device-driver/netw-device-driver-gnmi/internal/gnmic"
 	"github.com/openconfig/gnmi/proto/gnmi"
 	"github.com/pkg/errors"
+	"github.com/yndd/ndd-yang/pkg/parser"
 )
 
 const (
-	state    = "STATE"
-	config   = "CONFIG"
-	encoding = "JSON"
+	State         = "STATE"
+	Configuration = "CONFIG"
+	encoding      = "JSON"
 	//errors
 	errGnmiCreateGetRequest    = "gnmi create get request error"
 	errGnmiGet                 = "gnmi get error "
@@ -52,6 +56,7 @@ func init() {
 type sros struct {
 	target        *collector.Target
 	log           logging.Logger
+	parser        *parser.Parser
 	deviceDetails *ndrv1.DeviceDetails
 }
 
@@ -62,9 +67,17 @@ func (d *sros) Init(opts ...devices.DeviceOption) error {
 	return nil
 }
 
-func (s *sros) WithTarget(*collector.Target) {}
+func (d *sros) WithTarget(target *collector.Target) {
+	d.target = target
+}
 
-func (s *sros) WithLogging(logging.Logger) {}
+func (d *sros) WithLogging(log logging.Logger) {
+	d.log = log
+}
+
+func (d *sros) WithParser(log logging.Logger) {
+	d.parser = parser.NewParser(parser.WithLogger((log)))
+}
 
 func (d *sros) Discover(ctx context.Context) (*ndrv1.DeviceDetails, error) {
 	d.log.Debug("Discover SROS details ...")
@@ -82,7 +95,7 @@ func (d *sros) GetConfig(ctx context.Context) (map[string]interface{}, error) {
 	var rsp *gnmi.GetResponse
 
 	p = "/"
-	req, err = gnmic.CreateGetRequest(&p, utils.StringPtr(config), utils.StringPtr(encoding))
+	req, err = gnmic.CreateGetRequest(&p, utils.StringPtr(Configuration), utils.StringPtr(encoding))
 	if err != nil {
 		return nil, errors.Wrap(err, errGnmiCreateGetRequest)
 	}
@@ -130,12 +143,30 @@ func (d *sros) Get(ctx context.Context, p *string) (map[string]interface{}, erro
 	return nil, nil
 }
 
-func (d *sros) Update(ctx context.Context, p *string, data []byte) (*gnmi.SetResponse, error) {
-	req, err := gnmic.CreateSetRequest(p, data)
+func (d *sros) Update(ctx context.Context, u []*config.Update) (*gnmi.SetResponse, error) {
+	gnmiPrefix, err := collector.CreatePrefix("", "")
 	if err != nil {
-		d.log.Debug(errGnmiCreateSetRequest, "error", err)
-		return nil, errors.Wrap(err, errGnmiCreateSetRequest)
+		d.log.Debug(errGnmiSet, "error", err)
+		return nil, errors.Wrap(err, "prefix parse error")
 	}
+
+	updates := make([]*gnmi.Update, 0)
+	for _, upd := range u {
+		updates = append(updates, &gnmi.Update{
+			Path: d.parser.ConfigPath2GnmiPath(upd.Path),
+			Val: &gnmi.TypedValue{
+				Value: &gnmi.TypedValue_JsonIetfVal{
+					JsonIetfVal: bytes.Trim(upd.Value, " \r\n\t"),
+				},
+			},
+		})
+	}
+
+	req := &gnmi.SetRequest{
+		Prefix: gnmiPrefix,
+		Update: updates,
+	}
+
 	resp, err := d.target.Set(ctx, req)
 	if err != nil {
 		d.log.Debug(errGnmiSet, "error", err)
@@ -145,12 +176,65 @@ func (d *sros) Update(ctx context.Context, p *string, data []byte) (*gnmi.SetRes
 	return resp, nil
 }
 
-func (d *sros) Delete(ctx context.Context, p *string) (*gnmi.SetResponse, error) {
-	req, err := gnmic.CreateDeleteRequest(p)
+func (d *sros) Delete(ctx context.Context, p []*config.Path) (*gnmi.SetResponse, error) {
+	gnmiPrefix, err := collector.CreatePrefix("", "")
 	if err != nil {
-		d.log.Debug(errGnmiCreateDeleteRequest, "error", err)
-		return nil, errors.Wrap(err, errGnmiCreateDeleteRequest)
+		d.log.Debug(errGnmiSet, "error", err)
+		return nil, errors.Wrap(err, "prefix parse error")
 	}
+
+	deletes := make([]*gnmi.Path, 0)
+	for _, del := range p {
+		dp := d.parser.ConfigPath2GnmiPath(del)
+		deletes = append(deletes, dp)
+	}
+
+	req := &gnmi.SetRequest{
+		Prefix: gnmiPrefix,
+		Delete: deletes,
+	}
+
+	resp, err := d.target.Set(ctx, req)
+	if err != nil {
+		d.log.Debug(errGnmiSet, "error", err)
+		return nil, errors.Wrap(err, errGnmiSet)
+	}
+	d.log.Debug("response:", "resp", resp)
+
+	return resp, nil
+}
+
+func (d *sros) Set(ctx context.Context, u []*config.Update, p []*config.Path) (*gnmi.SetResponse, error) {
+	gnmiPrefix, err := collector.CreatePrefix("", "")
+	if err != nil {
+		d.log.Debug(errGnmiSet, "error", err)
+		return nil, errors.Wrap(err, "prefix parse error")
+	}
+
+	deletes := make([]*gnmi.Path, 0)
+	for _, del := range p {
+		dp := d.parser.ConfigPath2GnmiPath(del)
+		deletes = append(deletes, dp)
+	}
+
+	updates := make([]*gnmi.Update, 0)
+	for _, upd := range u {
+		updates = append(updates, &gnmi.Update{
+			Path: d.parser.ConfigPath2GnmiPath(upd.Path),
+			Val: &gnmi.TypedValue{
+				Value: &gnmi.TypedValue_JsonIetfVal{
+					JsonIetfVal: bytes.Trim(upd.Value, " \r\n\t"),
+				},
+			},
+		})
+	}
+
+	req := &gnmi.SetRequest{
+		Prefix: gnmiPrefix,
+		Update: updates,
+		Delete: deletes,
+	}
+
 	resp, err := d.target.Set(ctx, req)
 	if err != nil {
 		d.log.Debug(errGnmiSet, "error", err)
@@ -159,3 +243,4 @@ func (d *sros) Delete(ctx context.Context, p *string) (*gnmi.SetResponse, error)
 	d.log.Debug("response:", "resp", resp)
 	return resp, nil
 }
+*/

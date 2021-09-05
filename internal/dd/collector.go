@@ -14,14 +14,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package ddriver
+package dd
 
 import (
 	"context"
 	"sync"
 	"time"
 
-	"github.com/karimra/gnmic/collector"
+	"github.com/karimra/gnmic/target"
 	"github.com/netw-device-driver/ndd-runtime/pkg/logging"
 	"github.com/netw-device-driver/netw-device-driver-gnmi/internal/gnmic"
 	"github.com/pkg/errors"
@@ -44,15 +44,25 @@ type Collector interface {
 	StartSubscription(ctx context.Context, subName string, sub []string) error
 }
 
+// DeviceCollectorOption can be used to manipulate Options.
+type DeviceCollectorOption func(*DeviceCollector)
+
+// WithTargetLogger specifies how the object should log messages.
+func WithDeviceCollectorLogger(log logging.Logger) DeviceCollectorOption {
+	return func(o *DeviceCollector) {
+		o.log = log
+	}
+}
+
 type DeviceCollector struct {
 	TargetReceiveBuffer uint
 	RetryTimer          time.Duration
-	Target              *collector.Target
-	targetSubRespChan   chan *collector.SubscribeResponse
-	targetSubErrChan    chan *collector.TargetError
-	Subscriptions       map[string]*Subscription
-	Mutex               sync.RWMutex
-	log                 logging.Logger
+	Target              *target.Target
+	//targetSubRespChan   chan *collector.SubscribeResponse
+	//targetSubErrChan    chan *collector.TargetError
+	Subscriptions map[string]*Subscription
+	Mutex         sync.RWMutex
+	log           logging.Logger
 }
 
 type Subscription struct {
@@ -60,14 +70,18 @@ type Subscription struct {
 	CancelFn context.CancelFunc
 }
 
-func NewDeviceCollector(t *collector.Target, log logging.Logger) *DeviceCollector {
-	return &DeviceCollector{
+func NewDeviceCollector(t *target.Target, opts ...DeviceCollectorOption) *DeviceCollector {
+	c := &DeviceCollector{
 		Target:              t,
 		Subscriptions:       make(map[string]*Subscription),
 		Mutex:               sync.RWMutex{},
 		TargetReceiveBuffer: defaultTargetReceivebuffer,
 		RetryTimer:          defaultRetryTimer,
 	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
 func (c *DeviceCollector) Lock() {

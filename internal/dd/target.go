@@ -19,7 +19,8 @@ package dd
 import (
 	"context"
 
-	"github.com/karimra/gnmic/collector"
+	"github.com/karimra/gnmic/target"
+	"github.com/karimra/gnmic/types"
 	"github.com/netw-device-driver/ndd-runtime/pkg/logging"
 	"github.com/openconfig/gnmi/proto/gnmi"
 	"github.com/openconfig/gnmi/proto/gnmi_ext"
@@ -34,8 +35,8 @@ const (
 // target is a struct to hold the target configuration
 // used to handle gnmi capabilities
 type Target struct {
-	targetConfig *collector.TargetConfig
-	target       *collector.Target
+	targetConfig *types.TargetConfig
+	target       *target.Target
 	log          logging.Logger
 }
 
@@ -49,13 +50,13 @@ func WithTargetLogger(log logging.Logger) TargetOption {
 	}
 }
 
-func WithTargetConfig(tc *collector.TargetConfig) TargetOption {
+func WithTargetConfig(tc *types.TargetConfig) TargetOption {
 	return func(o *Target) {
 		o.targetConfig = tc
 	}
 }
 
-func NewTarget(target *collector.Target, opts ...TargetOption) *Target {
+func NewTarget(target *target.Target, opts ...TargetOption) *Target {
 	t := &Target{
 		target: target,
 	}
@@ -79,6 +80,6 @@ func (t *Target) DeviceCapabilities(ctx context.Context) ([]*gnmi.ModelData, err
 	return resp.SupportedModels, nil
 }
 
-func (t *Target) GetTarget() *collector.Target {
+func (t *Target) GetTarget() *target.Target {
 	return t.target
 }

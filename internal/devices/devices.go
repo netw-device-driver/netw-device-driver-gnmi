@@ -19,8 +19,9 @@ package devices
 import (
 	"context"
 
-	"github.com/karimra/gnmic/collector"
+	"github.com/karimra/gnmic/target"
 	ndddvrv1 "github.com/netw-device-driver/ndd-core/apis/dvr/v1"
+	config "github.com/netw-device-driver/ndd-grpc/config/configpb"
 	nddv1 "github.com/netw-device-driver/ndd-runtime/apis/common/v1"
 	"github.com/netw-device-driver/ndd-runtime/pkg/logging"
 	"github.com/openconfig/gnmi/proto/gnmi"
@@ -37,19 +38,31 @@ type Device interface {
 	// Init initializes the device
 	Init(...DeviceOption) error
 	// WithTarget, initializes the device target
-	WithTarget(target *collector.Target)
+	WithTarget(target *target.Target)
 	// WithLogging initializes the device logging
 	WithLogging(log logging.Logger)
+	// WithParser initializes the parser
+	WithParser(log logging.Logger)
 	// Discover, discovers the device and its respective data
 	Discover(ctx context.Context) (*ndddvrv1.DeviceDetails, error)
 	// GetConfig, gets the config from the device
 	GetConfig(ctx context.Context) (map[string]interface{}, error)
 	// Get, gets the gnmi path from the tree
 	Get(ctx context.Context, p *string) (map[string]interface{}, error)
+	// Get, gets the gnmi path from the tree
+	GetGnmi(ctx context.Context, p []*gnmi.Path) (map[string]interface{}, error)
 	// Update, updates the gnmi path from the tree with the respective data
-	Update(ctx context.Context, p *string, data []byte) (*gnmi.SetResponse, error)
+	Update(ctx context.Context, u []*config.Update) (*gnmi.SetResponse, error)
 	// Delete, deletes the gnmi path from the tree
-	Delete(ctx context.Context, p *string) (*gnmi.SetResponse, error)
+	UpdateGnmi(ctx context.Context, u []*gnmi.Update) (*gnmi.SetResponse, error)
+	// Delete, deletes the gnmi path from the tree
+	Delete(ctx context.Context, p []*config.Path) (*gnmi.SetResponse, error)
+	// Delete, deletes the gnmi path from the tree
+	DeleteGnmi(ctx context.Context, p []*gnmi.Path) (*gnmi.SetResponse, error)
+	// Set creates a single transaction for updates and deletes
+	Set(ctx context.Context, u []*config.Update, p []*config.Path) (*gnmi.SetResponse, error)
+	// Set creates a single transaction for updates and deletes
+	SetGnmi(ctx context.Context, u []*gnmi.Update, p []*gnmi.Path) (*gnmi.SetResponse, error)
 }
 
 var Devices = map[nddv1.DeviceType]Initializer{}
@@ -62,7 +75,7 @@ func Register(name nddv1.DeviceType, initFn Initializer) {
 
 type DeviceOption func(Device)
 
-func WithTarget(target *collector.Target) DeviceOption {
+func WithTarget(target *target.Target) DeviceOption {
 	return func(d Device) {
 		d.WithTarget(target)
 	}
@@ -71,5 +84,11 @@ func WithTarget(target *collector.Target) DeviceOption {
 func WithLogging(log logging.Logger) DeviceOption {
 	return func(d Device) {
 		d.WithLogging(log)
+	}
+}
+
+func WithParser(log logging.Logger) DeviceOption {
+	return func(d Device) {
+		d.WithParser(log)
 	}
 }
